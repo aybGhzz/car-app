@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OBD Scanner POC</title>
+  <link rel="stylesheet" href="lib/leaflet/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">OBD Scanner <small>POC</small></div>
+    <div class="conn">
+      <select id="transport" aria-label="Connection type">
+        <option value="sim">Simulator (no car needed)</option>
+        <option value="serial">ELM327 USB / Bluetooth serial port</option>
+        <option value="ble">ELM327 Bluetooth LE</option>
+      </select>
+      <select id="baud" aria-label="Baud rate" title="Serial baud rate">
+        <option>38400</option><option>9600</option><option>115200</option><option>500000</option>
+      </select>
+      <button id="connectBtn" class="primary">Connect</button>
+      <button id="recBtn" disabled>● Record CSV</button>
+      <span id="status" class="status">Disconnected</span>
+    </div>
+  </header>
+  <nav id="tabs"></nav>
+  <main id="view"></main>
+
+  <div id="hud" hidden>
+    <div class="hud-inner">
+      <div class="hud-speed"><span data-hud="0D">—</span><small>km/h</small></div>
+      <div class="hud-row">
+        <div><span data-hud="0C">—</span><small>rpm</small></div>
+        <div><span data-hud="05">—</span><small>°C coolant</small></div>
+        <div><span data-hud="cons">—</span><small data-hud="consUnit">L/100km</small></div>
+      </div>
+    </div>
+    <div class="hud-bar">
+      <button id="hudMirror">Mirror for windshield</button>
+      <button id="hudClose">Exit HUD</button>
+    </div>
+  </div>
+
+  <script src="dtc-db.js"></script>
+  <script src="dtc-i18n.js"></script>
+  <script src="i18n.js"></script>
+  <script src="elm327.js"></script>
+  <script src="obd.js"></script>
+  <script src="simulator.js"></script>
+  <script src="lib/leaflet/leaflet.js"></script>
+  <script src="app.js"></script>
+  <script src="garage.js"></script>
+</body>
+</html>

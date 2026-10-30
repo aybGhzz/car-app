@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "OBD Scanner",
+    "slug": "obd-scanner-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.example.obdscanner",
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "Connects to your ELM327 OBD-II adapter.",
+        "NSLocationWhenInUseUsageDescription": "Records where trips start and end."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0b0e13",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.example.obdscanner",
+      "permissions": [
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-localization",
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false,
+          "modes": [],
+          "bluetoothAlwaysPermission": "Connects to your ELM327 OBD-II adapter."
+        }
+      ]
+    ],
+    "scheme": "obdscanner",
+    "backgroundColor": "#0b0e13",
+    "experiments": {
+      "typedRoutes": false,
+      "baseUrl": "/car-app"
+    }
+  }
+}
