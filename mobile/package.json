@@ -3,32 +3,33 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
-    "@expo/metro-runtime": "~58.0.15",
+    "@expo/metro-runtime": "~58.0.16",
     "@expo/vector-icons": "^15.0.2",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@supabase/supabase-js": "^2.118.0",
     "babel-preset-expo": "^58.0.20",
-    "expo": "~58.0.19",
-    "expo-constants": "~58.0.13",
-    "expo-dev-client": "~58.0.15",
+    "expo": "~58.0.22",
+    "expo-constants": "~58.0.14",
+    "expo-dev-client": "~58.0.18",
+    "expo-font": "~58.0.10",
     "expo-haptics": "~58.0.7",
     "expo-linear-gradient": "~58.0.3",
-    "expo-linking": "~58.0.14",
+    "expo-linking": "~58.0.15",
     "expo-localization": "~58.0.5",
     "expo-location": "~58.0.19",
-    "expo-router": "~58.0.26",
+    "expo-router": "~58.0.29",
     "expo-status-bar": "~58.0.4",
     "nativewind": "^4.2.7",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "react-native": "0.88.0",
+    "react-native": "0.88.1",
     "react-native-ble-plx": "^3.5.1",
     "react-native-bluetooth-classic": "^1.73.0-rc.17",
     "react-native-gesture-handler": "~3.3.0",
     "react-native-maps": "1.29.11",
     "react-native-reanimated": "4.7.1",
     "react-native-safe-area-context": "~5.10.1",
-    "react-native-screens": "~4.30.0",
+    "react-native-screens": "~4.30.1",
     "react-native-svg": "15.16.0",
     "react-native-url-polyfill": "^4.0.0",
     "react-native-web": "~0.21.4",
@@ -36,6 +37,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.3.0",
+    "patch-package": "^8.0.1",
     "prettier-plugin-tailwindcss": "^0.8.1",
     "tailwindcss": "^3.4.19",
     "typescript": "~6.0.3"
@@ -47,7 +49,17 @@
     "web": "expo start --web",
     "export:web": "expo export -p web",
     "typecheck": "tsc --noEmit",
-    "start:dev-build": "expo start --dev-client"
+    "start:dev-build": "expo start --dev-client",
+    "postinstall": "patch-package"
   },
-  "private": true
+  "private": true,
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "react-native-bluetooth-classic"
+        ]
+      }
+    }
+  }
 }
