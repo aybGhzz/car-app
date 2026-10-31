@@ -33,6 +33,9 @@ jobs:
       - run: npx expo export -p web
         env:
           CI: 1
+          # public values (the database is protected by Row Level Security); without them the site works offline-only
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
       # Pages serves unknown paths (deep links such as /trips) with 404.html, so it is the app too.
       - run: cp dist/index.html dist/404.html && touch dist/.nojekyll
       - uses: actions/upload-pages-artifact@v3

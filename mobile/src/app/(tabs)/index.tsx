@@ -12,7 +12,7 @@ import { TripMap } from '../../components/TripMap';
 import { VehicleSwitcher } from '../../components/VehicleSwitcher';
 import { Button, Card, DemoTag, PressableScale, SectionTitle, T } from '../../components/ui';
 import { useDocRules, useNotifs } from '../../lib/alerts';
-import { DAY, dueStatus, serviceState, useOdometer, useServices, useVehicle, vehicleName, withStats, type Trip } from '../../lib/garage';
+import { DAY, dueStatus, serviceState, useOdometer, useServices, useVehicle, vehicleName, useTrips, withStats, type Trip } from '../../lib/garage';
 import { connect, useLive } from '../../lib/live';
 import { fmtDate, fmtTime, hm, num, t, useLang } from '../../lib/i18n';
 import { setSetting, useSettings } from '../../lib/settings';
@@ -30,7 +30,7 @@ export default function Home() {
   const docs = useDocRules();
   const notifs = useNotifs();
   const cfg = useSettings();
-  const stored = useStored<Trip[]>('trips', []);
+  const stored = useTrips();
   const trips = useMemo(() => withStats(stored, car.id, cfg.demo), [stored, car.id, cfg.demo]);
   const connected = S.status === 'connected';
   const user = useUser();

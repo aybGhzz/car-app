@@ -1,8 +1,11 @@
-// Sign-in placeholder until the backend exists: the profile is kept on this device only and no password is stored.
-// The screens (welcome, login, sign-up, profile) are real, so plugging in a server later only changes this file.
+// Accounts. With Supabase configured (see lib/supabase.ts) sign-in uses Supabase Auth (email + password) and the
+// session is kept on the phone; signing in starts the cloud sync (lib/sync.ts). Without it, the profile stays on this
+// device only, as before. "Continue without an account" always works offline.
+import type { User as AuthUser } from '@supabase/supabase-js';
 import { kv, useStored } from './store';
+import { supabase } from './supabase';
 
-export type User = { name: string; email: string; since: number; guest?: boolean };
+export type User = { name: string; email: string; since: number; guest?: boolean; id?: string; cloud?: boolean };
 
 export const useUser = () => useStored<User | null>('user', null);
 export const currentUser = () => kv.get<User | null>('user', null);
@@ -13,17 +16,76 @@ const nameFromEmail = (email: string) => {
 };
 export const validEmail = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.trim());
 
+const fromAuth = (u: AuthUser): User => ({
+  id: u.id, cloud: true, email: u.email ?? '',
+  name: (u.user_metadata?.name as string | undefined)?.trim() || nameFromEmail(u.email ?? ''),
+  since: Date.parse(u.created_at) || Date.now(),
+});
+
+// Supabase's English messages, made a little friendlier. Returned strings go through t() on the screen.
+function authError(m: string): string {
+  if (/invalid login credentials/i.test(m)) return 'Wrong email or password.';
+  if (/email not confirmed/i.test(m)) return 'Confirm your email first: open the link we sent you.';
+  if (/already registered|already exists/i.test(m)) return 'An account already exists with this email. Sign in instead.';
+  if (/network|fetch/i.test(m)) return 'No connection to the server. Check your internet, or continue without an account.';
+  return m;
+}
+
+// Returns an error message, or null when signed in. `info` is set when the user has to confirm their email first.
 export async function signIn(email: string, password: string, name?: string): Promise<string | null> {
   if (!validEmail(email)) return 'Enter a valid email address.';
   if (password.length < 6) return 'The password needs at least 6 characters.';
-  await new Promise(r => setTimeout(r, 900)); // where the server call will go
-  const known = kv.get<Record<string, string>>('accounts', {});
   const key = email.trim().toLowerCase();
+
+  if (supabase) {
+    const res = name != null
+      ? await supabase.auth.signUp({ email: key, password, options: { data: { name: name.trim() || nameFromEmail(key) } } })
+      : await supabase.auth.signInWithPassword({ email: key, password });
+    if (res.error) return authError(res.error.message);
+    if (!res.data.session || !res.data.user) return 'Account created. Open the link in the email we sent you, then sign in.';
+    kv.set('user', fromAuth(res.data.user));
+    return null;
+  }
+
+  // local-only accounts (no Supabase configured)
+  await new Promise(r => setTimeout(r, 600));
+  const known = kv.get<Record<string, string>>('accounts', {});
   const display = name?.trim() || known[key] || nameFromEmail(key);
   kv.set('accounts', { ...known, [key]: display });
   kv.set('user', { name: display, email: key, since: Date.now() } satisfies User);
   return null;
 }
+
+export async function resetPassword(email: string): Promise<string> {
+  if (!supabase) return 'Password reset needs the online accounts.';
+  if (!validEmail(email)) return 'Enter your email above first.';
+  const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase());
+  return error ? authError(error.message) : 'If an account exists for this email, a reset link is on its way.';
+}
+
 export const continueAsGuest = () => kv.set('user', { name: 'Guest', email: '', since: Date.now(), guest: true } satisfies User);
-export const signOut = () => kv.remove('user');
+
+// Signing out forgets the cloud copy on this phone (trips downloaded from the account). Cars and trips recorded
+// on this phone stay.
+export async function signOut() {
+  kv.remove('user');
+  for (const k of ['cloudTrips', 'sync.state', 'sync.ids', 'sync.pushedTrips', 'sync.known', 'sync.dirty']) kv.remove(k);
+  await supabase?.auth.signOut().catch(() => {});
+}
+
+// At start-up: keep the saved profile in step with the Supabase session (restored from storage, refreshed in the background).
+export function watchAuth() {
+  if (!supabase) return () => {};
+  supabase.auth.getSession().then(({ data }) => {
+    const u = currentUser();
+    if (data.session) kv.set('user', fromAuth(data.session.user));
+    else if (u?.cloud) kv.remove('user'); // the session expired or was revoked: sign in again
+  });
+  const { data } = supabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_OUT' && currentUser()?.cloud) kv.remove('user');
+    if ((event === 'SIGNED_IN' || event === 'USER_UPDATED') && session) kv.set('user', fromAuth(session.user));
+  });
+  return () => data.subscription.unsubscribe();
+}
+
 export const initials = (u: User | null) => (u?.name ?? '?').split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();

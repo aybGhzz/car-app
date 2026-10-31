@@ -9,10 +9,13 @@ import { Screen } from '../components/Screen';
 import { VehicleSwitcher } from '../components/VehicleSwitcher';
 import { Button, Card, PressableScale, Segmented, T, Toggle } from '../components/ui';
 import { odometer, setOdometer, useFuelPrice, useVehicle, vehicleName } from '../lib/garage';
-import { getLang, LANGS, setLang, t, useLang, type Lang } from '../lib/i18n';
+import { fmtDate, fmtTime, getLang, LANGS, setLang, t, useLang, type Lang } from '../lib/i18n';
 import { setSetting, setVehicleSetting, useSettings, useVehicleSettings, type ThemeId } from '../lib/settings';
-import { kv } from '../lib/store';
+import { kv, useStored } from '../lib/store';
 import { initials, useUser } from '../lib/auth';
+import { cloudEnabled } from '../lib/supabase';
+import { syncNow, useSyncState } from '../lib/sync';
+import { DotsLoader } from '../components/Loaders';
 import { C } from '../lib/theme';
 
 function Group({ title, scope, icon, children }: { title: string; scope: 'car' | 'app'; icon: any; children: ReactNode }) {
@@ -128,6 +131,10 @@ export default function Settings() {
         </View>
       </Group>
 
+      <Group title="Cloud sync" scope="app" icon="cloud">
+        <CloudSync />
+      </Group>
+
       <Group title="Data" scope="app" icon="server">
         <Card className="py-1">
           <Row label="Show demo trips" sub="Sample trips so the screens are not empty"><Toggle value={cfg.demo} onChange={v => setSetting('demo', v)} /></Row>
@@ -139,5 +146,34 @@ export default function Settings() {
 
       <T className="mt-6 text-center text-xs text-muted">Vindici · version 1.0 · proof of concept</T>
     </Screen>
+  );
+}
+
+// Account sync: who is signed in, when the last sync ran, and a manual "Sync now".
+function CloudSync() {
+  const user = useUser(), st = useSyncState();
+  const trips = useStored<unknown[]>('cloudTrips', []);
+  if (!cloudEnabled) return <Card><T className="text-sm text-muted">Cloud sync is not set up in this build of the app.</T></Card>;
+  if (!user?.cloud) {
+    return (
+      <Card>
+        <T className="mb-3 text-sm text-muted">Sign in to save your cars, papers, services and trips to your account and find them on any phone.</T>
+        <Button kind="primary" title="Sign in or create an account" onPress={() => router.push('/login')} />
+      </Card>
+    );
+  }
+  return (
+    <Card className="py-1">
+      <Row label="Account" sub={user.email}><Ionicons name="cloud-done-outline" size={20} color={C.ok} /></Row>
+      <Row label="Last sync" sub={st.error ? `${t('Error')}: ${st.error}` : st.at ? `${fmtDate(st.at)}, ${fmtTime(st.at)}` : t('Not synced yet')}>
+        {st.busy ? <DotsLoader /> : <Ionicons name={st.error ? 'alert-circle' : 'checkmark-circle'} size={20} color={st.error ? C.bad : C.ok} />}
+      </Row>
+      <Row label="Trips in the account" sub="Includes the Car Scanner history">
+        <Text className="font-bold text-text">{trips.length}</Text>
+      </Row>
+      <Row label="Sync now" sub="Changes are also sent automatically a few seconds after you make them" last>
+        <Button title="Sync" onPress={() => syncNow()} />
+      </Row>
+    </Card>
   );
 }

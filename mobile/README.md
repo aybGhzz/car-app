@@ -93,7 +93,27 @@ An iPhone build needs an Apple developer account (`eas build -p ios`).
 - `src/lib/live.ts`: connection, polling (only the PIDs on screen) and trip recording
 - `src/lib/garage.ts`: trip statistics, demo trips, ownership and service data
 - `src/lib/i18n*.ts|js`: translations (the POC's tables plus the app's new strings in `i18n-app.ts`)
-- Data is stored on the phone (AsyncStorage). There is no backend yet.
+- `src/lib/supabase.ts`, `src/lib/auth.ts`, `src/lib/sync.ts`: Supabase client, sign-in and cloud sync
+- Data is stored on the phone (AsyncStorage) and, when signed in, synced to Supabase.
+
+## Cloud sync (Supabase)
+
+The app signs in with Supabase Auth (email + password) and syncs to the `vindici` schema of the Supabase project:
+`vehicles` (cars, papers, odometer, fuel price), `services`, `trips` (summaries) and `trip_traces` (GPS trace and
+signal log). Row Level Security lets each account read and write only its own rows. The Car Scanner CSV history
+(`public.trips_metrics`) is copied into `vindici.trips` by `vindici.import_history()`, which the CSV pipeline calls
+after each run.
+
+The app only needs two public values. Never put the service_role key or the database password in the app: every
+`EXPO_PUBLIC_*` variable ends up inside the APK and the web build.
+
+| Where | How |
+|---|---|
+| Local (Expo Go, web) | copy `.env.example` to `.env` and fill in the anon key (`.env` is ignored by git) |
+| EAS build (APK) | `eas env:create --name EXPO_PUBLIC_SUPABASE_URL --value https://citmdaphjkwrqtxzcvoh.supabase.co --environment preview --visibility plaintext`, same for `EXPO_PUBLIC_SUPABASE_ANON_KEY`, then `eas build -p android --profile preview` |
+| GitHub Pages | repository secrets `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` (Settings > Secrets and variables > Actions) |
+
+Without these values the app works as before, with accounts on the phone only.
 
 ## Checks
 

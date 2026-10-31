@@ -8,6 +8,8 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Toast } from '../components/Toast';
 import { SkeletonScreen } from '../components/Loaders';
 import { watchDocs } from '../lib/alerts';
+import { watchAuth } from '../lib/auth';
+import { startSync } from '../lib/sync';
 import { kv } from '../lib/store';
 import { restoreLang } from '../lib/i18n';
 import { MAX_W } from '../lib/layout';
@@ -22,6 +24,11 @@ export default function RootLayout() {
   const { theme } = useSettings();
   useEffect(() => { kv.hydrate().then(() => { restoreLang(); setReady(true); }); }, []);
   useEffect(() => (ready ? watchDocs() : undefined), [ready]);
+  useEffect(() => {
+    if (!ready) return;
+    const offAuth = watchAuth(), offSync = startSync();
+    return () => { offAuth(); offSync(); };
+  }, [ready]);
   applyTheme(theme); // before rendering, so every component reads the new colours
   return (
     // keyed by theme: switching re-renders every screen with the new palette
