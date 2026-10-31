@@ -124,7 +124,12 @@ export async function disconnect() {
 async function pollLoop() {
   const fails: Record<string, number> = {};
   while (S.elm) {
-    for (const k of wantedKeys()) {
+    // Speed drives the trip distance, so read it between every few other signals: on a slow adapter or an older
+    // car (K-line), a full round of signals can take several seconds.
+    const keys = wantedKeys(), order: string[] = [];
+    keys.filter(k => k !== '0D').forEach((k, i) => { if (keys.includes('0D') && i % 3 === 0) order.push('0D'); order.push(k); });
+    if (!order.length && keys.includes('0D')) order.push('0D');
+    for (const k of order) {
       if (!S.elm || busy) break;
       try {
         const v = await OBD.value(S.elm, k);
@@ -161,7 +166,7 @@ export function fuelRateLh() {
 
 function tripUpdate(speed: number, t: number) {
   const T = S.trip;
-  if (T.last != null && t - T.last < 5) {
+  if (T.last != null && t - T.last < 15) { // gaps up to 15 s still count (slow adapters); longer ones are dropouts
     const dt = t - T.last;
     T.time += dt;
     T.dist += (speed * dt) / 3600;
