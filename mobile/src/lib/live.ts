@@ -30,6 +30,7 @@ export const S = {
   vehicle: '', // the car selected when connecting: its odometer and trips get the live data, even if another car is selected later
   elm: null as any,
   supported: null as Set<number> | null,
+  ecu: null as string | null, // the module the live data comes from (see OBD.pickEcu)
   dead: new Set<string>(),
   values: {} as Record<string, { v: number; t: number }>,
   history: {} as Record<string, [number, number][]>,
@@ -90,7 +91,10 @@ export async function connect(kind: ConnKind, deviceId?: string) {
     setStatus('connecting', 'Initializing adapter and detecting protocol…');
     await elm.init();
     S.elm = elm;
-    S.supported = await OBD.bitmap(elm, '01', 0x41);
+    setStatus('connecting', 'Finding the engine module…');
+    const pick = await OBD.pickEcu(elm, [...LOG_KEYS, 'A6']);
+    S.supported = pick.supported;
+    S.ecu = pick.ecu;
     S.dead.clear();
     S.values = {};
     S.history = {};
@@ -102,7 +106,7 @@ export async function connect(kind: ConnKind, deviceId?: string) {
       if (kind === 'sim') fakeGps = simGps();
       else startGps(addFix);
     }
-    setStatus('connected', elm.protocolName);
+    setStatus('connected', elm.protocolName + (pick.ecu ? ' · ECU ' + pick.ecu : ''));
     pollLoop();
   } catch (e: any) {
     setStatus('error', e?.message ?? String(e));

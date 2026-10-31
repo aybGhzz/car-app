@@ -84,6 +84,54 @@ export const OBD = {
     return set;
   },
 
+  // Asks every module for its supported Mode 01 PIDs, with headers on so the answers can be told apart, and waits
+  // longer than usual so slow modules get to answer. Returns { ecu: Set of PIDs } keyed by the sender's address.
+  async ecuBitmaps(elm) {
+    const by = {};
+    const header = elm.protocolNumber === 7 || elm.protocolNumber === 9 ? 8 : 3; // CAN 29-bit / 11-bit header length
+    const parse = l => {
+      if (!/^[0-9A-F]+$/.test(l)) return null;
+      if (elm.isCAN) {
+        if (l.length < header + 4) return null;
+        const ecu = l.slice(0, header), b = l.slice(header).match(/../g).map(h => parseInt(h, 16));
+        return { ecu, data: b.slice(1, 1 + (b[0] & 0x0f)) }; // single frame: first byte is the length
+      }
+      if (l.length % 2 || l.length < 10) return null; // K-line / J1850: 3 header bytes, data, checksum
+      const b = l.match(/../g).map(h => parseInt(h, 16));
+      return { ecu: hex2(b[2]), data: b.slice(3, -1) };
+    };
+    try {
+      for (const c of ['ATH1', 'ATAT0', 'ATSTFF']) await elm.send(c); // ~1 s for each module to answer
+      for (let base = 0; base <= 0xE0; base += 0x20) {
+        let any = false;
+        for (const l of ELM327.lines(await elm.send('01' + hex2(base), 15000))) {
+          const r = parse(l);
+          if (!r || r.data[0] !== 0x41 || r.data[1] !== base) continue;
+          const set = (by[r.ecu] ??= new Set());
+          for (let i = 0; i < 32; i++) if (r.data[2 + (i >> 3)] & (0x80 >> (i & 7))) set.add(base + i + 1);
+          any = true;
+        }
+        if (!any || !Object.values(by).some(s => s.has(base + 0x20))) break;
+      }
+    } finally {
+      for (const c of ['ATH0', 'ATST32', 'ATAT1']) await elm.send(c).catch(() => {});
+    }
+    return by;
+  },
+
+  // Picks the module that reports the most of the signals the app's metrics need (normally the engine ECU or the
+  // gateway), and on CAN listens only to it. Falls back to every module's list merged.
+  async pickEcu(elm, important) {
+    let by = {};
+    try { by = await OBD.ecuBitmaps(elm); } catch {}
+    const score = s => important.filter(k => s.has(parseInt(k, 16))).length;
+    const ranked = Object.entries(by).sort(([, a], [, b]) => score(b) - score(a) || b.size - a.size);
+    if (!ranked.length) return { ecu: null, supported: await OBD.bitmap(elm, '01', 0x41), ecus: {} };
+    const [ecu, supported] = ranked[0];
+    if (elm.isCAN && ranked.length > 1) await elm.send('ATCRA' + ecu).catch(() => {});
+    return { ecu, supported, ecus: Object.fromEntries(ranked.map(([e, s]) => [e, score(s)])) };
+  },
+
   async dtcs(elm, mode) {
     const sid = parseInt(mode, 16) + 0x40, out = [];
     for (const m of ELM327.messages(await elm.send(mode, 8000))) {
