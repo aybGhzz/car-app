@@ -1,8 +1,15 @@
-// Native map (Apple Maps on iOS, Google Maps on Android) with the GPS trace and start/end pins.
+// Trip map with the GPS trace and start/end pins. iOS uses Apple Maps (react-native-maps). Android uses the same
+// OpenStreetMap tile map as the web app, so no Google Maps API key is needed.
+import { Platform } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { C } from '../lib/theme';
+import { TripMap as TileMap } from './TripMapTiles';
 
-export function TripMap({ path, height = 220, compact = false }: { path: [number, number][]; height?: number; compact?: boolean }) {
+export function TripMap(props: { path: [number, number][]; height?: number; compact?: boolean }) {
+  return Platform.OS === 'android' ? <TileMap {...props} /> : <NativeMap {...props} />;
+}
+
+function NativeMap({ path, height = 220, compact = false }: { path: [number, number][]; height?: number; compact?: boolean }) {
   const lats = path.map(p => p[0]), lngs = path.map(p => p[1]);
   const region = {
     latitude: (Math.min(...lats) + Math.max(...lats)) / 2, longitude: (Math.min(...lngs) + Math.max(...lngs)) / 2,
