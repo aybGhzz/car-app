@@ -6,6 +6,8 @@ import { router, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { BackHeader } from '../../components/BackHeader';
 import { Field } from '../../components/Field';
+import { Select } from '../../components/Select';
+import { CATALOG, GEARBOXES, enginesFor, findModel, yearsFor } from '../../lib/catalog';
 import { Screen } from '../../components/Screen';
 import { Sheet } from '../../components/Sheet';
 import { Button, PressableScale, T } from '../../components/ui';
@@ -38,6 +40,7 @@ function Chips<K extends string>({ value, options, onChange }: { value: K; optio
   );
 }
 
+const fuelLabelOf = (k: string) => FUELS.find(x => x[0] === k)?.[1] ?? k;
 const isDate = (s: string) => !s || /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 export default function CarEdit() {
@@ -57,6 +60,7 @@ export default function CarEdit() {
 
   function save() {
     if (!f.make.trim() && !f.model.trim()) return setErr('Enter at least the make or the model.');
+    if (f.vin && f.vin.replace(/\s/g, '').length !== 17) return setErr('A VIN has 17 characters.');
     if (![f.insStart, f.insExpiry, f.vtLast, f.vtNext].every(isDate)) return setErr('Dates must look like 2026-12-31.');
     const data = { ...f };
     // A new inspection date pre-fills the next one a year later, unless that was changed too.
@@ -76,16 +80,31 @@ export default function CarEdit() {
   return (
     <Screen title={title} header={<BackHeader title={title} onBack={() => router.back()} />}>
       <Section title="Vehicle" icon="car-sport" index={0}>
-        <View className="flex-row gap-2"><View className="flex-1"><Field label="Make" value={f.make} onChange={set('make')} placeholder="Toyota" /></View>
-          <View className="flex-1"><Field label="Model" value={f.model} onChange={set('model')} placeholder="Corolla" /></View></View>
-        <View className="flex-row gap-2"><View className="flex-1"><Field label="Year" value={f.year} keyboard="numeric" onChange={set('year')} placeholder="2020" /></View>
-          <View className="flex-1"><Field label="Plate number" value={f.plate} onChange={set('plate')} placeholder="12345-A-6" /></View></View>
+        {/* cascading lists: each choice narrows the next one; "Other" allows typing a car that is not listed */}
+        <Select label="Make" value={f.make} placeholder="Choose a make"
+          options={CATALOG.map(m => ({ value: m.name, label: m.name, sub: `${m.models.length} ${t('models')}` }))}
+          onChange={make => setF({ ...f, make, ...(make !== f.make ? { model: '', year: '', engine: '' } : {}) })} />
+        <Select label="Model" value={f.model} placeholder="Choose a model" disabled={!f.make}
+          options={(CATALOG.find(m => m.name === f.make)?.models ?? []).map(m => ({ value: m.name, label: m.name, sub: `${m.years[0]}–${m.years[1]}` }))}
+          onChange={model => setF({ ...f, model, ...(model !== f.model ? { year: '', engine: '' } : {}) })} />
+        <View className="flex-row gap-2">
+          <View className="flex-1">
+            <Select label="Year" value={f.year} placeholder="Year" disabled={!f.model}
+              options={yearsFor(f.make, f.model).map(y => ({ value: y, label: y }))} onChange={year => setF({ ...f, year })} />
+          </View>
+          <View className="flex-1"><Field label="Plate number" value={f.plate} onChange={set('plate')} placeholder="12345-A-6" /></View>
+        </View>
+        <Select label="Engine" value={f.engine} placeholder="Choose an engine" disabled={!f.model}
+          options={enginesFor(f.make, f.model, f.year).map(en => ({ value: en.name, label: en.name, sub: `${t(fuelLabelOf(en.fuel))} · ${en.kw} kW (${Math.round(en.kw * 1.36)} ${t('hp')})`, en }))}
+          onChange={(engine, o: any) => setF({ ...f, engine, ...(o?.en ? { fuel: o.en.fuel, gearbox: o.en.gearbox ?? f.gearbox } : {}) })}
+          hint={findModel(f.make, f.model) ? 'Choosing an engine also sets the fuel.' : undefined} />
         <T className="mb-1 text-xs text-muted">Fuel</T>
         <Chips value={f.fuel} options={FUELS} onChange={fuel => setF({ ...f, fuel })} />
-        <View className="flex-row gap-2"><View className="flex-1"><Field label="Engine" value={f.engine} onChange={set('engine')} placeholder="1.6" /></View>
-          <View className="flex-1"><Field label="Gearbox" value={f.gearbox} onChange={set('gearbox')} placeholder={t('Manual')} /></View></View>
+        <Select label="Gearbox" value={f.gearbox} placeholder="Choose a gearbox"
+          options={[...new Set([...(findModel(f.make, f.model)?.engines.map(en => en.gearbox).filter(Boolean) as string[] ?? []), ...GEARBOXES])].map(g => ({ value: g, label: t(g) }))}
+          onChange={set('gearbox')} />
+        <Field label="VIN" value={f.vin} onChange={v => set('vin')(v.toUpperCase())} placeholder="17 characters" />
         <Field label="Note" value={f.note} onChange={set('note')}  />
-        <Field label="VIN" value={f.vin} onChange={set('vin')} />
       </Section>
 
       <Section title="Mileage and fuel" icon="speedometer" index={1}>

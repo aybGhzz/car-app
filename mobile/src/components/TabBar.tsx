@@ -9,7 +9,8 @@ import { getLang, t, useLang } from '../lib/i18n';
 import { C } from '../lib/theme';
 
 const ICONS: Record<string, [keyof typeof Ionicons.glyphMap, keyof typeof Ionicons.glyphMap]> = {
-  index: ['speedometer', 'speedometer-outline'],
+  index: ['home', 'home-outline'],
+  dashboard: ['speedometer', 'speedometer-outline'],
   codes: ['pulse', 'pulse-outline'],
   trips: ['map', 'map-outline'],
   service: ['construct', 'construct-outline'],
@@ -18,7 +19,8 @@ const ICONS: Record<string, [keyof typeof Ionicons.glyphMap, keyof typeof Ionico
 
 // Short labels so five tabs fit on a phone in every language.
 const SHORT: Record<string, Record<string, string>> = {
-  index: { en: 'Dashboard', fr: 'Bord', es: 'Panel' },
+  index: { en: 'Home', fr: 'Accueil', es: 'Inicio' },
+  dashboard: { en: 'Live', fr: 'Direct', es: 'En vivo' },
   codes: { en: 'Codes', fr: 'Codes', es: 'Códigos' },
   service: { en: 'Service', fr: 'Entretien', es: 'Servicio' },
 };
@@ -28,7 +30,7 @@ function Tab({ focused, icon, label, onPress }: { focused: boolean; icon: [any, 
   useEffect(() => { s.value = withSpring(focused ? 1 : 0, { damping: 12, stiffness: 200 }); }, [focused]);
   const iconStyle = useAnimatedStyle(() => ({ transform: [{ scale: 1 + s.value * 0.15 }, { translateY: -s.value * 1.5 }] }));
   return (
-    <Pressable onPress={onPress} className="flex-1 items-center justify-center py-2">
+    <Pressable onPress={onPress} accessibilityRole="tab" accessibilityState={{ selected: focused }} accessibilityLabel={label} className="flex-1 items-center justify-center py-2">
       <Animated.View style={iconStyle}>
         <Ionicons name={focused ? icon[0] : icon[1]} size={22} color={focused ? C.accent : C.muted} />
       </Animated.View>
@@ -41,16 +43,17 @@ export function TabBar({ state, descriptors, navigateToTab, insets }: BottomTabB
   useLang();
   const [w, setW] = useState(0);
   const x = useSharedValue(0);
-  const n = state.routes.length, tabW = w / n;
+  // The bar has a 1 px border and 4 px of padding on each side, so each tab gets (width - 10) / n.
+  const n = state.routes.length, tabW = (w - 10) / n;
   useEffect(() => { x.value = withSpring(state.index * tabW, { damping: 16, stiffness: 170 }); }, [state.index, tabW]);
   const pill = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
 
   return (
     <View style={{ position: 'absolute', left: 12, right: 12, bottom: Math.max(insets.bottom, 10) }}>
-      <View onLayout={e => setW(e.nativeEvent.layout.width)} className="flex-row rounded-[26px] border border-line bg-panel/95 p-1"
+      <View onLayout={e => setW(e.nativeEvent.layout.width)} className="flex-row rounded-[26px] border border-line bg-panel p-1"
         style={{ shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 12 }}>
         {w > 0 && (
-          <Animated.View style={[{ position: 'absolute', top: 4, bottom: 4, left: 4, width: tabW - 8 + 0, borderRadius: 22, backgroundColor: C.accent + '1f', borderWidth: 1, borderColor: C.accent + '40' }, pill]} />
+          <Animated.View style={[{ position: 'absolute', top: 4, bottom: 4, left: 4, width: tabW, borderRadius: 22, backgroundColor: C.accent + '1f', borderWidth: 1, borderColor: C.accent + '40' }, pill]} />
         )}
         {state.routes.map((r, i) => (
           <Tab key={r.key} focused={state.index === i} icon={ICONS[r.name] ?? ICONS.index} label={SHORT[r.name]?.[getLang()] ?? t(descriptors[r.key].options.title ?? r.name)}

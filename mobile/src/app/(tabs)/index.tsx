@@ -1,143 +1,155 @@
-// Dashboard: a big speedometer with shift lights, then the user's own gauges (long-press one to change it).
-import { useEffect, useState } from 'react';
-import { Text, View, useWindowDimensions } from 'react-native';
-import Animated, { FadeIn, LinearTransition, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withSpring, withTiming, ZoomIn, ZoomOut } from 'react-native-reanimated';
+// Home: where the app opens. The selected car, what needs attention (papers, service, alerts), shortcuts,
+// the last trip and the week, each one tap away from its screen.
+import { useMemo } from 'react';
+import { Text, View } from 'react-native';
+import Animated, { FadeInDown } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
-import * as Haptics from 'expo-haptics';
-import { Gauge } from '../../components/Gauge';
+import { Redirect, router } from 'expo-router';
+import { useUser } from '../../lib/auth';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Screen } from '../../components/Screen';
+import { TripMap } from '../../components/TripMap';
 import { VehicleSwitcher } from '../../components/VehicleSwitcher';
-import { Sheet } from '../../components/Sheet';
-import { Button, Card, PressableScale, SectionTitle, StatTile, T } from '../../components/ui';
-import { availableKeys, connect, fuelRateLh, meta, useLive, useWantedPids, val } from '../../lib/live';
-import { hm, num, t, useLang } from '../../lib/i18n';
-import { kv, useStored } from '../../lib/store';
-import { C } from '../../lib/theme';
+import { Button, Card, DemoTag, PressableScale, SectionTitle, T } from '../../components/ui';
+import { useDocRules, useNotifs } from '../../lib/alerts';
+import { DAY, dueStatus, serviceState, useOdometer, useServices, useVehicle, vehicleName, withStats, type Trip } from '../../lib/garage';
+import { connect, useLive } from '../../lib/live';
+import { fmtDate, fmtTime, hm, num, t, useLang } from '../../lib/i18n';
+import { setSetting, useSettings } from '../../lib/settings';
+import { useStored } from '../../lib/store';
+import { C, KIND_COLOR } from '../../lib/theme';
 
-const DEFAULT_GAUGES = ['0C', '05', '04', '11', '42', '2F'];
+type Attention = { icon: any; title: string; sub: string; kind: 'ok' | 'warn' | 'bad'; route: string };
 
-function ShiftLights({ rpm }: { rpm: number | null }) {
-  const lit = rpm == null ? 0 : Math.max(0, Math.min(10, Math.round(((rpm - 2000) / 4400) * 10)));
-  return (
-    <View className="mb-1 flex-row justify-center gap-1.5">
-      {Array.from({ length: 10 }, (_, i) => <Led key={i} on={i < lit} color={i < 5 ? C.ok : i < 8 ? C.warn : C.bad} flash={lit >= 10} />)}
-    </View>
-  );
-}
-function Led({ on, color, flash }: { on: boolean; color: string; flash: boolean }) {
-  const o = useSharedValue(0.15);
-  useEffect(() => {
-    o.value = flash ? withRepeat(withSequence(withTiming(1, { duration: 70 }), withTiming(0.2, { duration: 70 })), -1) : withTiming(on ? 1 : 0.15, { duration: 120 });
-  }, [on, flash]);
-  const s = useAnimatedStyle(() => ({ opacity: o.value, transform: [{ scale: 0.85 + o.value * 0.15 }] }));
-  return <Animated.View style={[{ width: 14, height: 14, borderRadius: 7, backgroundColor: color, shadowColor: color, shadowOpacity: 0.9, shadowRadius: 6 }, s]} />;
-}
-
-function Offline() {
-  const pulse = useSharedValue(1);
-  useEffect(() => { pulse.value = withRepeat(withSequence(withTiming(1.06, { duration: 900 }), withTiming(1, { duration: 900 })), -1); }, []);
-  const s = useAnimatedStyle(() => ({ transform: [{ scale: pulse.value }] }));
-  return (
-    <Card className="items-center overflow-hidden py-8">
-      <LinearGradient colors={[C.accent + '30', 'transparent']} style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 160 }} />
-      <Text className="text-5xl">🚗</Text>
-      <T className="mt-3 text-center text-xl font-bold">Not connected</T>
-      <T className="mb-5 mt-1 text-center text-muted">Plug the ELM327 into the OBD port, or try the built-in simulator.</T>
-      <Animated.View style={s}>
-        <Button kind="primary" icon="▶" title="Start the simulator" onPress={() => connect('sim')} />
-      </Animated.View>
-    </Card>
-  );
-}
-
-export default function Dashboard() {
+export default function Home() {
   useLang();
   const S = useLive();
-  const { width } = useWindowDimensions();
-  const gauges = useStored<string[]>('gauges', DEFAULT_GAUGES);
-  const [editing, setEditing] = useState<number | null>(null);
-  useWantedPids(['0C', '0D', ...gauges]);
-
-  const setGauges = (g: string[]) => kv.set('gauges', g);
+  const car = useVehicle();
+  const odo = useOdometer(car.id).value;
+  const services = useServices(car.id);
+  const docs = useDocRules();
+  const notifs = useNotifs();
+  const cfg = useSettings();
+  const stored = useStored<Trip[]>('trips', []);
+  const trips = useMemo(() => withStats(stored, car.id, cfg.demo), [stored, car.id, cfg.demo]);
   const connected = S.status === 'connected';
-  const speed = val('0D'), rpm = val('0C');
-  const T_ = S.trip, rate = fuelRateLh();
-  const inst = rate != null && speed != null ? (speed > 3 ? (rate / speed) * 100 : rate) : null;
-  const big = Math.min(width - 64, 300), small = Math.floor((width - 32 - 12) / 2 - 26); // 2 per row: card padding + border
+  const user = useUser();
 
+  // What needs attention for this car, most urgent first.
+  const items: Attention[] = [];
+  const ins = dueStatus(car.insExpiry), vt = dueStatus(car.vtNext);
+  if (ins.days != null && ins.days <= Math.max(docs.insurance.days, 30)) items.push({ icon: 'shield-checkmark', title: ins.days < 0 ? 'Insurance expired' : `Insurance in ${ins.days} days`, sub: car.insCompany, kind: ins.days <= docs.insurance.days ? 'bad' : 'warn', route: '/papers' });
+  if (vt.days != null && vt.days <= Math.max(docs.vt.days, 45)) items.push({ icon: 'clipboard', title: vt.days < 0 ? 'Visite technique expired' : `Visite technique in ${vt.days} days`, sub: car.vtCenter, kind: vt.days <= docs.vt.days ? 'bad' : 'warn', route: '/papers' });
+  for (const s of services) {
+    const st = serviceState(s, odo);
+    if (st.left <= docs.service.km * 2) items.push({ icon: 'construct', title: st.left < 0 ? `${t(s.name)}: ${t('overdue')}` : `${t(s.name)}: ${num(st.left)} km ${t('left')}`, sub: t('Service'), kind: st.left < 0 ? 'bad' : 'warn', route: '/service' });
+  }
+  const unread = notifs.filter(n => !n.read && (!n.vehicle || n.vehicle === car.id) && n.key.startsWith('sig'));
+  if (unread.length) items.unshift({ icon: 'pulse', title: unread[0].title, sub: unread[0].body, kind: unread[0].level === 'bad' ? 'bad' : 'warn', route: '/notifications' });
+  items.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'bad' ? -1 : 1));
+
+  const last = trips[0];
+  const week = trips.filter(tr => tr.start >= Date.now() - 7 * DAY);
+  const hour = new Date().getHours();
+  const hello = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+
+  if (!user) return <Redirect href="/welcome" />; // first launch: welcome, then sign in or continue as a guest
   return (
-    <Screen title="Dashboard" subtitle={connected ? S.message : undefined}>
+    <Screen title="Home" subtitle={user.guest ? hello : `${t(hello)}, ${user.name.split(' ')[0]}`}>
       <VehicleSwitcher />
-      {!connected ? <Offline /> : (
-        <Animated.View entering={FadeIn.duration(500)}>
-          <Card className="items-center pb-5 pt-4">
-            <ShiftLights rpm={rpm} />
-            <Gauge value={speed} min={0} max={240} unit="km/h" label="Vehicle speed" size={big} ticks redFrom={0.75} />
-            <View className="mt-3 w-full flex-row justify-around">
-              <Mini label="Engine RPM" value={rpm == null ? '—' : num(rpm)} unit="rpm" />
-              <Mini label="Instant consumption" value={inst == null ? '—' : num(inst, 1)} unit={speed != null && speed > 3 ? 'L/100km' : 'L/h'} />
-            </View>
-          </Card>
-        </Animated.View>
-      )}
-
-      <SectionTitle right={<PressableScale onPress={() => router.push('/sensors')}><T className="font-semibold text-accent">All sensors →</T></PressableScale>}>
-        Gauges
-      </SectionTitle>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-        {gauges.map((k, i) => {
-          const m = meta(k);
-          return (
-            <Animated.View key={k + i} entering={ZoomIn.springify().delay(i * 40)} exiting={ZoomOut.duration(180)} layout={LinearTransition.springify()}>
-              <PressableScale delayLongPress={350} onLongPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {}); setEditing(i); }}
-                onPress={() => setEditing(i)} className="items-center rounded-3xl border border-line bg-panel px-3 pb-3 pt-2">
-                <Gauge value={val(k)} min={m.min} max={m.max} unit={m.unit} label={m.name} dp={m.dp} size={small} />
-              </PressableScale>
-            </Animated.View>
-          );
-        })}
-      </View>
-      <View className="mt-3 flex-row gap-2">
-        <Button title="+ Add gauge" className="flex-1" onPress={() => setGauges([...gauges, availableKeys().find(k => !gauges.includes(k)) ?? '0C'])} />
-      </View>
-      <T className="mt-2 px-1 text-xs text-muted">Tap a gauge to change its sensor.</T>
-
-      {connected && T_.time > 0 ? (
-        <>
-          <SectionTitle>Current trip</SectionTitle>
-          <View className="flex-row flex-wrap gap-2.5">
-            <StatTile index={0} label="Distance" value={num(T_.dist, 2)} unit="km" />
-            <StatTile index={1} label="Duration" value={hm(T_.time)} />
-            <StatTile index={2} label="Fuel used" value={num(T_.fuel, 2)} unit="L" />
-            <StatTile index={3} label="Top speed" value={num(T_.max)} unit="km/h" />
-          </View>
-        </>
+      {cfg.demo && trips.some(tr => tr.demo) ? (
+        <View className="mb-3 flex-row items-center rounded-2xl border border-violet/40 bg-violet/10 px-3 py-2.5">
+          <Ionicons name="flask" size={16} color={C.violet} />
+          <T className="ml-2 flex-1 text-xs text-text">Sample trips are shown so you can explore the app.</T>
+          <Text onPress={() => setSetting('demo', false)} className="ml-2 text-xs font-bold text-violet">{t('Hide them')}</Text>
+        </View>
       ) : null}
 
-      <Sheet open={editing != null} onClose={() => setEditing(null)} title="Choose a sensor">
-        {editing != null ? (
-          <>
-            {availableKeys().filter(k => k !== 'A6').map(k => (
-              <PressableScale key={k} onPress={() => { const g = [...gauges]; g[editing] = k; setGauges(g); setEditing(null); }}
-                className={`mb-1.5 flex-row items-center justify-between rounded-2xl border px-4 py-3 ${gauges[editing] === k ? 'border-accent bg-accent/10' : 'border-line bg-panel2'}`}>
-                <T className="flex-1 font-semibold">{meta(k).name}</T>
-                <T className="text-xs text-muted">{meta(k).unit}</T>
-              </PressableScale>
-            ))}
-            <Button kind="danger" title="Remove gauge" className="mt-2" onPress={() => { setGauges(gauges.filter((_, i) => i !== editing)); setEditing(null); }} />
-          </>
-        ) : null}
-      </Sheet>
+      {/* the car */}
+      <Card className="overflow-hidden">
+        <LinearGradient colors={[C.accent + '30', 'transparent']} style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 140 }} />
+        <View className="flex-row items-start">
+          <View className="flex-1">
+            <Text numberOfLines={1} className="text-xl font-extrabold text-text">{vehicleName(car) || t('New car')}</Text>
+            <Text numberOfLines={1} className="text-xs text-muted">{[car.year, car.engine, car.plate].filter(Boolean).join(' · ')}</Text>
+          </View>
+          <View className={`flex-row items-center rounded-full px-2.5 py-1 ${connected ? 'bg-ok/15' : 'bg-line'}`}>
+            <View style={{ backgroundColor: connected ? C.ok : C.muted }} className="mr-1.5 h-2 w-2 rounded-full" />
+            <T className={`text-[11px] font-bold ${connected ? 'text-ok' : 'text-muted'}`}>{connected ? (S.kind === 'sim' ? 'Simulator' : 'Connected') : 'Not connected'}</T>
+          </View>
+        </View>
+        <View className="mt-4 flex-row items-end justify-between">
+          <View>
+            <Text style={{ fontVariant: ['tabular-nums'] }} className="text-3xl font-extrabold text-text">{num(odo)}</Text>
+            <T className="text-xs text-muted">km on the odometer</T>
+          </View>
+          <Ionicons name="car-sport" size={56} color={C.accent + '55'} />
+        </View>
+        <View className="mt-4">
+          {connected ? <Button kind="primary" title="Open the live dashboard" onPress={() => router.push('/dashboard')} />
+            : <Button kind="primary" title="Start the simulator" onPress={() => connect('sim')} />}
+        </View>
+      </Card>
+
+      <SectionTitle right={<T className="text-xs text-muted">{items.length ? `${items.length}` : ''}</T>}>Needs attention</SectionTitle>
+      {items.length ? items.slice(0, 4).map((it, i) => (
+        <Animated.View key={it.title} entering={FadeInDown.delay(80 + i * 60).springify().damping(16)}>
+          <PressableScale onPress={() => router.push(it.route as any)} className="mb-2 flex-row items-center rounded-3xl border border-line bg-panel p-3.5">
+            <View style={{ backgroundColor: KIND_COLOR[it.kind] + '22' }} className="mr-3 h-10 w-10 items-center justify-center rounded-2xl">
+              <Ionicons name={it.icon} size={19} color={KIND_COLOR[it.kind]} />
+            </View>
+            <View className="flex-1">
+              <Text numberOfLines={1} className="font-bold text-text">{t(it.title)}</Text>
+              {it.sub ? <Text numberOfLines={1} className="text-xs text-muted">{t(it.sub)}</Text> : null}
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={C.muted} />
+          </PressableScale>
+        </Animated.View>
+      )) : (
+        <Card className="flex-row items-center"><Ionicons name="checkmark-circle" size={22} color={C.ok} /><T className="ml-2 text-muted">All good: papers and service are up to date.</T></Card>
+      )}
+
+      <SectionTitle>Shortcuts</SectionTitle>
+      <View className="flex-row flex-wrap gap-2.5">
+        {([['speedometer', 'Live data', '/dashboard'], ['pulse', 'Trouble codes', '/codes'], ['map', 'Trips', '/trips'],
+          ['construct', 'Service', '/service'], ['shield-checkmark', 'Papers', '/papers'], ['car-sport', 'My cars', '/cars']] as const).map(([icon, label, route], i) => (
+          <Animated.View key={route} entering={FadeInDown.delay(120 + i * 40).springify().damping(16)} style={{ flexBasis: '30%', flexGrow: 1 }}>
+            <PressableScale onPress={() => router.push(route as any)} className="items-center rounded-3xl border border-line bg-panel py-4">
+              <Ionicons name={icon} size={24} color={C.accent} />
+              <T numberOfLines={1} className="mt-1.5 text-xs font-semibold">{label}</T>
+            </PressableScale>
+          </Animated.View>
+        ))}
+      </View>
+
+      {last ? (
+        <>
+          <SectionTitle right={<Text onPress={() => router.push('/trips')} className="font-semibold text-accent">{t('All trips →')}</Text>}>Last trip</SectionTitle>
+          <PressableScale onPress={() => router.push(`/trip/${last.id}`)} className="overflow-hidden rounded-3xl border border-line bg-panel">
+            {last.path?.length > 1 ? <View pointerEvents="none"><TripMap path={last.path} height={120} compact /></View> : null}
+            <View className="flex-row items-center p-4 pt-3">
+              <View className="flex-1">
+                <Text className="font-bold text-text">{fmtDate(last.start)} · {fmtTime(last.start)}</Text>
+                {last.places ? <Text numberOfLines={1} className="text-xs text-muted">{last.places[0]} → {last.places[1]}</Text> : null}
+              </View>
+              {last.demo ? <DemoTag /> : null}
+            </View>
+            <View className="flex-row gap-6 px-4 pb-4">
+              <Text className="text-lg font-bold text-text">{hm(last.stats.time)}</Text>
+              <Text className="text-lg font-bold text-text">{num(last.stats.dist, 1)} km</Text>
+            </View>
+          </PressableScale>
+
+          <Card className="mt-2.5 flex-row justify-between">
+            <Wk v={num(week.reduce((a, x) => a + x.stats.dist, 0))} l="km this week" />
+            <Wk v={String(week.length)} l="Trips" />
+            <Wk v={hm(week.reduce((a, x) => a + x.stats.time, 0))} l="Time driving" />
+          </Card>
+        </>
+      ) : null}
     </Screen>
   );
 }
-
-function Mini({ label, value, unit }: { label: string; value: string; unit: string }) {
-  return (
-    <View className="items-center">
-      <Text style={{ fontVariant: ['tabular-nums'] }} className="text-2xl font-extrabold text-text">{value}</Text>
-      <Text className="text-[11px] text-muted">{t(unit)} · {t(label)}</Text>
-    </View>
-  );
-}
+const Wk = ({ v, l }: { v: string; l: string }) => (
+  <View className="items-center"><Text className="text-lg font-extrabold text-text">{v}</Text><T className="text-[11px] text-muted">{l}</T></View>
+);

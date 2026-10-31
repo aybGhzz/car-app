@@ -6,15 +6,36 @@ export const DAY = 86400000;
 // samples: [seconds since start, speed km/h, coolant °C, intake air °C, fuel rate L/h]
 export type Sample = [number, number, number | null, number | null, number | null];
 export type Split = { city: number; highway: number; road: number };
+// Who drove: a copy of the car's identity at the time of the trip, so a trip stays traceable in a database
+// even if the car is renamed, re-plated or deleted later.
+export type CarRef = { id: string; name: string; make: string; model: string; year: string; engine: string; plate: string; vin: string };
+// Every logged signal, one row per sample: row[0] is seconds since start, row[i] is the value of keys[i - 1] (PID, null if missing).
+export type TripLog = { keys: string[]; rows: (number | null)[][] };
 export type Trip = {
   id: string; start: number; end: number; samples: Sample[]; path: [number, number][];
-  split: Split; demo?: boolean; places?: [string, string]; vehicle?: string;
+  split: Split; demo?: boolean; places?: [string, string]; vehicle?: string; car?: CarRef; log?: TripLog;
 };
 export type MinMax = { min: number; max: number; avg: number } | null;
 export type TripStats = ReturnType<typeof tripStats>;
-export type LiveTrip = { dist: number; fuel: number; time: number; moving: number; max: number; last: number | null; startedAt: number | null; samples: Sample[]; path: [number, number][] };
+export type LiveTrip = { dist: number; fuel: number; time: number; moving: number; max: number; last: number | null; startedAt: number | null; samples: Sample[]; path: [number, number][]; log: TripLog };
 
-export const newTrip = (): LiveTrip => ({ dist: 0, fuel: 0, time: 0, moving: 0, max: 0, last: null, startedAt: null, samples: [], path: [] });
+export const newTrip = (keys: string[] = []): LiveTrip => ({ dist: 0, fuel: 0, time: 0, moving: 0, max: 0, last: null, startedAt: null, samples: [], path: [], log: { keys, rows: [] } });
+
+export const carRef = (v: Vehicle): CarRef => ({ id: v.id, name: vehicleName(v), make: v.make, model: v.model, year: v.year, engine: v.engine, plate: v.plate, vin: v.vin });
+
+// One signal of a trip as [seconds, value] points. Older trips without a log still have speed, temperatures and fuel rate.
+const SAMPLE_COL: Record<string, number> = { '0D': 1, '05': 2, '0F': 3, '5E': 4 };
+export function tripKeys(tr: Trip): string[] {
+  return tr.log?.keys.length ? tr.log.keys : Object.keys(SAMPLE_COL).filter(k => tr.samples.some(s => s[SAMPLE_COL[k]] != null));
+}
+export function tripSeries(tr: Trip, key: string): [number, number][] {
+  if (tr.log?.keys.length) {
+    const i = tr.log.keys.indexOf(key) + 1;
+    return i ? tr.log.rows.filter(r => r[i] != null).map(r => [r[0]!, r[i]!]) : [];
+  }
+  const c = SAMPLE_COL[key];
+  return c ? tr.samples.filter(s => s[c] != null).map(s => [s[0], s[c]!]) : [];
+}
 
 export function tripStats(samples: Sample[]) {
   let dist = 0, fuel = 0, driving = 0, maxSpeed = 0, hardAcc = 0, hardBrake = 0, maxAcc = 0, maxDec = 0, inAcc = false, inBrake = false;
@@ -50,10 +71,13 @@ export function randomSplit(rand = Math.random): Split {
 
 export const useFuelPrice = (id: string) => useStored<number>('fuelPrice.' + id, DEFAULT_FUEL_PRICE[vehicleById(id)?.fuel ?? 'petrol']);
 
+// Saves the trip with the car's identity (id, name, plate, VIN…) copied onto the record. Kept to the last 60 trips:
+// every signal is logged once a second, and the browser's storage is small.
 export function finishTrip(T: LiveTrip, vehicle = activeId()) {
   if (T.samples.length > 5 && T.dist > 0.05) {
-    const trips = kv.get<Trip[]>('trips', []);
-    kv.set('trips', [{ id: Date.now().toString(36), start: T.startedAt!, end: Date.now(), samples: T.samples, path: T.path, split: randomSplit(), vehicle }, ...trips].slice(0, 200));
+    const trips = kv.get<Trip[]>('trips', []), v = vehicleById(vehicle);
+    kv.set('trips', [{ id: Date.now().toString(36), start: T.startedAt!, end: Date.now(), samples: T.samples, path: T.path, split: randomSplit(), vehicle,
+      car: v ? carRef(v) : undefined, log: T.log }, ...trips].slice(0, 60));
     bumpOdometer(T.dist, vehicle);
   }
 }
@@ -77,8 +101,9 @@ function demoTrip(vehicle: string, seed: number, dayOffset: number, startHour: n
   const rand = mulberry32(seed), split = randomSplit(rand);
   const legs: [keyof Split, number][] = [['city', split.city * 0.6], ['road', split.road / 2], ['highway', split.highway], ['road', split.road / 2], ['city', split.city * 0.4]];
   const target = { city: [35, 15], road: [75, 12], highway: [112, 8] };
-  const samples: Sample[] = [];
-  let t = 0, v = 0, d = 0, stopIn = 0.4 + rand() * 0.4, stopped = 0;
+  const samples: Sample[] = [], rows: (number | null)[][] = [], dists: number[] = [];
+  const diesel = vehicle === 'x5', ratio = diesel ? [0, 105, 62, 41, 31, 25, 21] : [0, 120, 72, 49, 37, 30, 25]; // rpm per km/h in each gear
+  let t = 0, v = 0, d = 0, stopIn = 0.4 + rand() * 0.4, stopped = 0, oil = 22;
   const dt = 2;
   for (const [kind, pct] of legs) {
     const legEnd = d + (distKm * pct) / 100;
@@ -97,12 +122,39 @@ function demoTrip(vehicle: string, seed: number, dayOffset: number, startHour: n
       const coolant = Math.min(89 + rand() * 4, 24 + t / 7);
       const iat = 24 + Math.min(14, t / 120) + rand() * 3 + (v < 5 ? 4 : 0);
       const cons = kind === 'city' ? cCity + rand() * 4 : kind === 'road' ? cRoad + rand() * 1.5 : cHwy + rand() * 1.5;
-      samples.push([t, Math.round(v), Math.round(coolant), Math.round(iat), v < 2 ? 0.75 : (cons * v) / 100]);
+      const rate = v < 2 ? 0.75 : (cons * v) / 100, acc = samples.length ? (v - samples[samples.length - 1][1]) / dt : 0;
+      samples.push([t, Math.round(v), Math.round(coolant), Math.round(iat), rate]);
+      const gear = v < 3 ? 0 : v < 18 ? 1 : v < 35 ? 2 : v < 55 ? 3 : v < 75 ? 4 : v < 95 ? 5 : 6;
+      const rpm = gear ? v * ratio[gear] + (rand() - 0.5) * 80 : 720 + rand() * 60;
+      const throttle = Math.max(0, Math.min(100, gear ? 8 + v * 0.12 + acc * 9 + rand() * 4 : 0));
+      oil += (Math.min(coolant + 8, 105) - oil) * 0.004 * dt;
+      rows.push([t, Math.round(v), Math.round(rpm), Math.round(throttle), Math.round(Math.max(12, Math.min(100, throttle * 0.9 + 14 + rand() * 4))),
+        Math.round(coolant), Math.round(iat), Math.round(oil), +rate.toFixed(2), +(14.05 + (rand() - 0.5) * 0.25).toFixed(2)]);
+      dists.push(d);
     }
   }
   const start = new Date(new Date().setHours(startHour, Math.floor(rand() * 60), 0, 0) - dayOffset * DAY).getTime();
-  return { id: 'demo' + seed, demo: true, vehicle, start, end: start + t * 1000, samples,
-    path: [PLACES[from], PLACES[to]].map(p => [p[0], p[1]] as [number, number]), places: [PLACES[from][2], PLACES[to][2]], split };
+  const v0 = VEHICLES_DEFAULT.find(x => x.id === vehicle)!;
+  return { id: 'demo' + seed, demo: true, vehicle, car: carRef(v0), start, end: start + t * 1000, samples,
+    log: { keys: ['0D', '0C', '11', '04', '05', '0F', '5C', '5E', '42'], rows },
+    path: demoRoute(PLACES[from], PLACES[to], dists, d, rand), places: [PLACES[from][2], PLACES[to][2]], split };
+}
+
+// A plausible GPS trace between two places: the straight line bent into a wide curve, plus a slow random wander,
+// sampled every few seconds along the distance actually driven. The real app records the phone's GPS instead.
+function demoRoute(a: [number, number, string], b: [number, number, string], dists: number[], total: number, rand: () => number): [number, number][] {
+  const out: [number, number][] = [];
+  const dLat = b[0] - a[0], dLng = b[1] - a[1], len = Math.hypot(dLat, dLng) || 1;
+  const nLat = -dLng / len, nLng = dLat / len, bend = (rand() < 0.5 ? -1 : 1) * (0.12 + rand() * 0.18) * len;
+  let wLat = 0, wLng = 0;
+  for (let i = 0; i < dists.length; i += 3) {
+    const f = total ? dists[i] / total : 0;
+    wLat = wLat * 0.95 + (rand() - 0.5) * 0.012 * len; wLng = wLng * 0.95 + (rand() - 0.5) * 0.012 * len;
+    const side = Math.sin(Math.PI * f) * bend + Math.sin(Math.PI * 3 * f) * bend * 0.25, damp = Math.sin(Math.PI * f);
+    out.push([a[0] + dLat * f + nLat * side + wLat * damp, a[1] + dLng * f + nLng * side + wLng * damp]);
+  }
+  out.push([b[0], b[1]]);
+  return out;
 }
 
 export type TripWithStats = Trip & { stats: TripStats };
@@ -116,8 +168,9 @@ const demoTrips = () => (demoCache ??= [
 
 const statsCache = new WeakMap<Trip, TripWithStats>();
 // All trips, or only one vehicle's. Trips saved before vehicles existed count as the first vehicle's.
-export const withStats = (trips: Trip[], vehicle?: string) =>
-  trips.map(tr => statsCache.get(tr) ?? (statsCache.set(tr, { ...tr, stats: tripStats(tr.samples) }), statsCache.get(tr)!)).concat(demoTrips())
+// The sample trips are left out once the user turns off demo data in Settings.
+export const withStats = (trips: Trip[], vehicle?: string, demo = kv.get<{ demo?: boolean }>('settings', {}).demo !== false) =>
+  trips.map(tr => statsCache.get(tr) ?? (statsCache.set(tr, { ...tr, stats: tripStats(tr.samples) }), statsCache.get(tr)!)).concat(demo ? demoTrips() : [])
     .filter(tr => !vehicle || (tr.vehicle ?? VEHICLES_DEFAULT[0].id) === vehicle)
     .sort((a, b) => b.start - a.start);
 

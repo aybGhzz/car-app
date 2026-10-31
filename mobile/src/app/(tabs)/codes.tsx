@@ -1,14 +1,17 @@
 // Trouble codes: a radar sweep while the ECUs are read, then the codes drop in one by one.
 import { useEffect, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Linking, Text, View } from 'react-native';
 import Animated, { Easing, FadeInDown, FadeOut, LinearTransition, cancelAnimation, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 import { Screen } from '../../components/Screen';
+import { DotsLoader } from '../../components/Loaders';
 import { VehicleSwitcher } from '../../components/VehicleSwitcher';
 import { Sheet } from '../../components/Sheet';
 import { Button, Card, Empty, Pill, PressableScale, SectionTitle, T } from '../../components/ui';
-import { clearCodes, readCodes, useLive } from '../../lib/live';
+import { clearCodes, connect, readCodes, useLive } from '../../lib/live';
+import { useVehicle, useVehicles, type Vehicle } from '../../lib/garage';
+import { searchUrl, useSettings } from '../../lib/settings';
 import { describeDTC } from '../../lib/obd/dtc-db';
 import { t, useLang } from '../../lib/i18n';
 import { C } from '../../lib/theme';
@@ -42,16 +45,23 @@ function Radar({ active, onPress, disabled }: { active: boolean; onPress: () => 
         </Animated.View>
         <PressableScale onPress={onPress} disabled={disabled}
           className={`h-24 w-24 items-center justify-center rounded-full ${disabled ? 'bg-panel2' : 'bg-accent'}`}>
-          <Ionicons name={active ? 'radio' : 'scan'} size={30} color={disabled ? C.muted : '#001523'} />
-          <Text style={{ color: disabled ? C.muted : '#001523' }} className="mt-0.5 text-xs font-bold">{t(active ? 'Scanning…' : 'Read codes')}</Text>
+          <Ionicons name={active ? 'radio' : 'scan'} size={30} color={disabled ? C.muted : C.onAccent} />
+          {active ? <View className="mt-1.5"><DotsLoader size={6} color={C.onAccent} /></View>
+            : <Text style={{ color: disabled ? C.muted : C.onAccent }} className="mt-0.5 text-xs font-bold">{t('Read codes')}</Text>}
         </PressableScale>
       </View>
     </View>
   );
 }
 
-function CodeCard({ code, kind, index }: { code: string; kind: 'Stored' | 'Pending' | 'Permanent'; index: number }) {
+// "BMW 525i E60 2003 2.5 P0171": what the web search looks for, from the car the codes were read from.
+const searchQuery = (v: Vehicle | undefined, code: string) => [v?.make, v?.model, v?.year, v?.engine, code].filter(Boolean).join(' ');
+const ENGINE_NAME = { google: 'Google', bing: 'Bing', duckduckgo: 'DuckDuckGo' } as const;
+
+function CodeCard({ code, kind, index, car }: { code: string; kind: 'Stored' | 'Pending' | 'Permanent'; index: number; car?: Vehicle }) {
   const [open, setOpen] = useState(false);
+  const { search } = useSettings();
+  const q = searchQuery(car, code);
   const color = kind === 'Stored' ? C.bad : kind === 'Pending' ? C.warn : C.violet;
   return (
     <Animated.View entering={FadeInDown.delay(index * 90).springify()} exiting={FadeOut} layout={LinearTransition.springify()}>
@@ -66,6 +76,16 @@ function CodeCard({ code, kind, index }: { code: string; kind: 'Stored' | 'Pendi
             <Text numberOfLines={open ? undefined : 2} className="mt-1.5 text-sm text-muted">{describeDTC(code)}</Text>
           </View>
         </View>
+        {/* no built-in code database: send the user to a web search for this car and this code */}
+        <PressableScale onPress={() => Linking.openURL(searchUrl(q, search))} accessibilityRole="link"
+          className="mx-4 mb-4 ml-5 flex-row items-center rounded-2xl border border-line bg-panel2 px-3 py-2.5">
+          <Ionicons name="search" size={16} color={C.accent} />
+          <View className="ml-2 flex-1">
+            <Text className="text-sm font-semibold text-accent">{t('Search the web')} · {ENGINE_NAME[search]}</Text>
+            <Text numberOfLines={1} className="text-[11px] text-muted">“{q}”</Text>
+          </View>
+          <Ionicons name="open-outline" size={16} color={C.muted} />
+        </PressableScale>
       </PressableScale>
     </Animated.View>
   );
@@ -79,6 +99,8 @@ export default function Codes() {
   const [msg, setMsg] = useState('');
   const [confirm, setConfirm] = useState(false);
   const connected = S.status === 'connected';
+  const vehicles = useVehicles(), selected = useVehicle();
+  const car = (connected && vehicles.find(v => v.id === S.vehicle)) || selected; // the codes belong to the connected car
 
   async function read() {
     setBusy('read'); setMsg('');
@@ -106,11 +128,18 @@ export default function Codes() {
   const mil = res?.readiness?.mil;
   let n = 0;
   return (
-    <Screen title="Trouble codes" subtitle="Reads stored (03), pending (07) and permanent (0A) codes from all ECUs that answer.">
+    <Screen title="Trouble codes">
       <VehicleSwitcher />
       <Card className="items-center">
-        <Radar active={busy === 'read'} onPress={read} disabled={!connected || !!busy} />
-        {!connected ? <T className="text-center text-muted">Connect to an adapter, or pick "Simulator" and press Connect.</T> : null}
+        {!res || busy === 'read' ? <Radar active={busy === 'read'} onPress={read} disabled={!connected || !!busy} /> : (
+          <View className="w-full"><Button kind="primary" title="Read again" onPress={read} /></View>
+        )}
+        {!connected ? (
+          <>
+            <T className="mb-3 text-center text-muted">Connect to an adapter to read the codes.</T>
+            <View className="w-full"><Button kind="primary" title="Start the simulator" onPress={() => connect('sim')} /></View>
+          </>
+        ) : null}
         {msg ? <Text className="mt-1 text-center text-warn">{t(msg)}</Text> : null}
       </Card>
 
@@ -132,7 +161,7 @@ export default function Codes() {
             return list.length ? (
               <View key={kind}>
                 <SectionTitle>{kind}</SectionTitle>
-                {list.map(c => <CodeCard key={kind + c} code={c} kind={kind} index={n++} />)}
+                {list.map(c => <CodeCard key={kind + c} code={c} kind={kind} index={n++} car={car} />)}
               </View>
             ) : null;
           })}
@@ -155,7 +184,7 @@ export default function Codes() {
 
           {total ? <Button kind="danger" title={busy === 'clear' ? 'Clearing…' : 'Clear codes'} className="mt-5" disabled={!!busy} onPress={() => setConfirm(true)} /> : null}
         </>
-      ) : connected ? <Empty text="Press the button to read the trouble codes." /> : null}
+      ) : connected && !busy ? <Empty text="Press the button to read the trouble codes." /> : null}
 
       <Sheet open={confirm} onClose={() => setConfirm(false)} title="Clear codes">
         <T className="mb-4 text-muted">{'Clear all trouble codes?\n\nThis turns off the check-engine light, erases freeze frame data and resets the emissions readiness monitors. Do it with the engine off and ignition on.'}</T>

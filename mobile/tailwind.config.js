@@ -1,20 +1,14 @@
 /** @type {import('tailwindcss').Config} */
+// Colours come from CSS variables set by the active theme (src/lib/theme.ts), so one class works in every theme.
+const v = name => `rgb(var(--c-${name}) / <alpha-value>)`;
 module.exports = {
   content: ['./src/**/*.{ts,tsx}'],
   presets: [require('nativewind/preset')],
   theme: {
     extend: {
       colors: {
-        bg: '#0b0e13',
-        panel: '#151a21',
-        panel2: '#1d232c',
-        line: '#29303b',
-        text: '#e8ebf1',
-        muted: '#8b93a3',
-        accent: '#3fb6ff',
-        ok: '#3ccf7a',
-        warn: '#ffb020',
-        bad: '#ff5a5a',
+        bg: v('bg'), panel: v('panel'), panel2: v('panel2'), line: v('line'), text: v('text'), muted: v('muted'),
+        accent: v('accent'), accent2: v('accent2'), onaccent: v('onAccent'), ok: v('ok'), warn: v('warn'), bad: v('bad'), violet: v('violet'),
       },
     },
   },
