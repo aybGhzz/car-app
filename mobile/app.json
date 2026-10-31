@@ -46,6 +46,14 @@
           "modes": [],
           "bluetoothAlwaysPermission": "Connects to your ELM327 OBD-II adapter."
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "extraProguardRules": "-keep class androidx.work.** { *; }\n-keep class androidx.room.** { *; }\n-keep class * extends androidx.room.RoomDatabase { *; }\n-keep class **_Impl { *; }"
+          }
+        }
       ]
     ],
     "scheme": "obdscanner",
