@@ -33,14 +33,14 @@ export function Gauge({ value, min, max, label, unit, dp = 0, size = 150, redFro
 
   const stroke = size * 0.075, c = size / 2, r = c - stroke - (ticks ? size * 0.07 : 2);
   const L = (r * SWEEP * Math.PI) / 180;
-  const warm = (v: number) => {
-    'worklet';
-    return interpolateColor(v, [0, redFrom * 0.8, redFrom, 1], [color, color, C.warn, C.bad]);
-  };
 
-  const arcProps = useAnimatedProps(() => ({ strokeDashoffset: L * (1 - p.value), stroke: warm(p.value) }));
+  // Only the length is animated. The colour is worked out on each render (live values re-render several times a
+  // second) and drawn as a plain prop, so a colour rule shows at once on every platform.
+  const frac = value == null ? 0 : Math.max(0, Math.min(1, (value - min) / (max - min || 1)));
+  const arcColor = redFrom > 1 ? color : interpolateColor(frac, [0, redFrom * 0.8, redFrom, 1], [color, color, C.warn, C.bad]);
+  const arcProps = useAnimatedProps(() => ({ strokeDashoffset: L * (1 - p.value) }), [L]);
   const needle = useAnimatedStyle(() => ({ transform: [{ rotate: `${-SWEEP / 2 + SWEEP * p.value}deg` }] }));
-  const tip = useAnimatedStyle(() => ({ backgroundColor: warm(p.value) }));
+  
 
   const majors = ticks ? Array.from({ length: 9 }, (_, i) => i / 8) : [];
   return (
@@ -54,8 +54,8 @@ export function Gauge({ value, min, max, label, unit, dp = 0, size = 150, redFro
         </Defs>
         <Path d={arcPath(c, r)} stroke="url(#track)" strokeWidth={stroke} strokeLinecap="round" fill="none" />
         {/* soft glow under the value arc */}
-        <AnimatedPath animatedProps={arcProps} d={arcPath(c, r)} strokeWidth={stroke * 2.2} strokeOpacity={0.12} strokeLinecap="round" fill="none" strokeDasharray={`${L} ${L}`} />
-        <AnimatedPath animatedProps={arcProps} d={arcPath(c, r)} strokeWidth={stroke} strokeLinecap="round" fill="none" strokeDasharray={`${L} ${L}`} />
+        <AnimatedPath animatedProps={arcProps} stroke={arcColor} d={arcPath(c, r)} strokeWidth={stroke * 2.2} strokeOpacity={0.12} strokeLinecap="round" fill="none" strokeDasharray={`${L} ${L}`} />
+        <AnimatedPath animatedProps={arcProps} stroke={arcColor} d={arcPath(c, r)} strokeWidth={stroke} strokeLinecap="round" fill="none" strokeDasharray={`${L} ${L}`} />
         {majors.map(f => {
           const deg = -SWEEP / 2 + SWEEP * f;
           const [x0, y0] = polar(c, r + stroke * 0.9, deg), [x1, y1] = polar(c, r + stroke * 1.6, deg), [tx, ty] = polar(c, r - stroke * 1.5, deg);
@@ -71,7 +71,7 @@ export function Gauge({ value, min, max, label, unit, dp = 0, size = 150, redFro
       </Svg>
       {/* needle: a square the size of the gauge, rotated around its centre, with the bar drawn in its top half */}
       <Animated.View pointerEvents="none" style={[{ position: 'absolute', width: size, height: size, alignItems: 'center' }, needle]}>
-        <Animated.View style={[{ marginTop: c - r - stroke * 0.2, width: Math.max(3, size * 0.022), height: r * 0.5, borderRadius: 4, opacity: ticks ? 1 : 0 }, tip]} />
+        <Animated.View style={[{ marginTop: c - r - stroke * 0.2, width: Math.max(3, size * 0.022), height: r * 0.5, borderRadius: 4, opacity: ticks ? 1 : 0, backgroundColor: arcColor }]} />
       </Animated.View>
       <View pointerEvents="none" style={{ position: 'absolute', top: c - size * (ticks ? 0.1 : 0.16), width: size }} className="items-center">
         <Text style={{ fontSize: size * (ticks ? 0.17 : 0.21), fontVariant: ['tabular-nums'] }} className="font-extrabold text-text">

@@ -5,13 +5,17 @@ import { Pressable, Text, View, type PressableProps, type ViewStyle } from 'reac
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSpring, withTiming, Easing, useAnimatedReaction } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 import { t, useLang } from '../lib/i18n';
 import { C, KIND_COLOR } from '../lib/theme';
 
-export function T({ children, className = '', ...p }: { children: ReactNode; className?: string; numberOfLines?: number }) {
+// Translated text. The default colour applies only when the caller gives none: a default class listed first would
+// win over the caller's colour (that made the primary buttons unreadable).
+const HAS_COLOR = /(^|\s)text-(text|muted|accent|onaccent|ok|warn|bad|violet|white|black|\[#)/;
+export function T({ children, className = '', style, ...p }: { children: ReactNode; className?: string; numberOfLines?: number; style?: any }) {
   useLang();
   const tr = (c: ReactNode): ReactNode => (typeof c === 'string' ? t(c) : Array.isArray(c) ? c.map(tr) : c);
-  return <Text className={'text-text ' + className} {...p}>{tr(children)}</Text>;
+  return <Text className={(HAS_COLOR.test(className) ? '' : 'text-text ') + className} style={style} {...p}>{tr(children)}</Text>;
 }
 
 // Slides in from below. index staggers lists so items arrive one after the other.
@@ -23,11 +27,12 @@ export function Card({ children, className = '', index = 0, style }: { children:
   );
 }
 
-export function PressableScale({ children, className = '', haptic = true, style, ...p }: PressableProps & { className?: string; haptic?: boolean; children: ReactNode; style?: ViewStyle }) {
+export function PressableScale({ children, className = '', haptic = true, style, accessibilityRole = 'button', ...p }: PressableProps & { className?: string; haptic?: boolean; children: ReactNode; style?: ViewStyle }) {
   const s = useSharedValue(1);
   const anim = useAnimatedStyle(() => ({ transform: [{ scale: s.value }] }));
   return (
     <Pressable
+      accessibilityRole={accessibilityRole}
       {...p}
       onPressIn={e => { s.value = withSpring(0.95, { damping: 15, stiffness: 400 }); p.onPressIn?.(e); }}
       onPressOut={e => { s.value = withSpring(1, { damping: 12, stiffness: 300 }); p.onPressOut?.(e); }}
@@ -41,13 +46,14 @@ export function PressableScale({ children, className = '', haptic = true, style,
 }
 
 const BTN = {
-  primary: ['bg-accent', 'text-[#001523] font-bold'],
+  primary: ['overflow-hidden', 'text-onaccent font-bold'], // gradient background, drawn below
   ghost: ['bg-panel2 border border-line', 'text-text font-semibold'],
   danger: ['border border-bad', 'text-bad font-semibold'],
 };
 export function Button({ title, onPress, kind = 'ghost', disabled, icon, className = '' }: { title: string; onPress?: () => void; kind?: keyof typeof BTN; disabled?: boolean; icon?: string; className?: string }) {
   return (
     <PressableScale onPress={onPress} disabled={disabled} className={`flex-row items-center justify-center rounded-2xl px-4 py-3 ${BTN[kind][0]} ${disabled ? 'opacity-40' : ''} ${className}`}>
+      {kind === 'primary' ? <LinearGradient colors={C.grad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }} /> : null}
       {icon ? <Text className={'mr-2 ' + BTN[kind][1]}>{icon}</Text> : null}
       <T className={BTN[kind][1]}>{title}</T>
     </PressableScale>
@@ -101,3 +107,49 @@ export const Empty = ({ text }: { text: string }) => (
 );
 
 export { C };
+
+// On/off switch drawn with a spring, the same on every platform.
+export function Toggle({ value, onChange, disabled }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  const x = useSharedValue(value ? 1 : 0);
+  useEffect(() => { x.value = withSpring(value ? 1 : 0, { damping: 16, stiffness: 220 }); }, [value]);
+  const knob = useAnimatedStyle(() => ({ transform: [{ translateX: x.value * 20 }] }));
+  return (
+    <Pressable accessibilityRole="switch" accessibilityState={{ checked: value, disabled }} disabled={disabled}
+      onPress={() => { Haptics.selectionAsync().catch(() => {}); onChange(!value); }}
+      style={{ width: 48, height: 28, borderRadius: 14, padding: 3, backgroundColor: value ? C.accent : C.line, opacity: disabled ? 0.4 : 1 }}>
+      <Animated.View style={[{ width: 22, height: 22, borderRadius: 11, backgroundColor: value ? C.onAccent : C.dark ? C.muted : '#ffffff' }, knob]} />
+    </Pressable>
+  );
+}
+
+// A row of options where one is selected.
+export function Segmented<K extends string>({ value, options, onChange, className = '' }: { value: K; options: [K, string][]; onChange: (k: K) => void; className?: string }) {
+  return (
+    <View className={'flex-row rounded-2xl border border-line bg-panel2 p-1 ' + className}>
+      {options.map(([k, l]) => (
+        <Pressable key={k} accessibilityRole="tab" accessibilityState={{ selected: value === k }} onPress={() => onChange(k)}
+          className={`flex-1 items-center rounded-xl px-2 py-2 ${value === k ? 'bg-accent' : ''}`}>
+          <T numberOfLines={1} className={`text-sm font-semibold ${value === k ? 'text-onaccent' : 'text-muted'}`}>{l}</T>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+// Colour swatches for gauges, rules and chart lines.
+export const SWATCHES = [C.accent, C.ok, C.warn, C.bad, C.violet, '#f472b6', '#2dd4bf', '#475569'];
+export function Swatches({ value, onChange }: { value?: string; onChange: (c: string) => void }) {
+  return (
+    <View className="flex-row flex-wrap gap-2">
+      {SWATCHES.map(c => (
+        <Pressable key={c} accessibilityRole="button" accessibilityLabel={c} onPress={() => onChange(c)}
+          style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: c, borderWidth: value === c ? 3 : 0, borderColor: '#fff' }} />
+      ))}
+    </View>
+  );
+}
+
+// Small "Demo" label for sample data.
+export const DemoTag = () => (
+  <View className="rounded-full border border-violet/50 bg-violet/10 px-2 py-0.5"><T className="text-[10px] font-bold uppercase text-violet">Demo</T></View>
+);

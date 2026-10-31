@@ -6,6 +6,7 @@ import { scheduleOnRN } from 'react-native-worklets';
 import { GestureDetector, GestureHandlerRootView, usePanGesture } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { T } from './ui';
+import { MAX_W } from '../lib/layout';
 
 export function Sheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title?: string; children: ReactNode }) {
   const { height } = useWindowDimensions();
@@ -45,7 +46,7 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
         <Animated.View style={[{ position: 'absolute', inset: 0, backgroundColor: '#000' }, backdrop]}>
           <Pressable style={{ flex: 1 }} onPress={onClose} />
         </Animated.View>
-        <Animated.View style={[{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: height * 0.88 }, panel]}>
+        <Animated.View style={[{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: height * 0.88, width: '100%', maxWidth: MAX_W, alignSelf: 'center', marginHorizontal: 'auto' }, panel]}>
           <View className="rounded-t-[28px] border border-line bg-panel" style={{ paddingBottom: insets.bottom + 12 }}>
             <GestureDetector gesture={pan}>
               <View className="items-center pb-2 pt-3">

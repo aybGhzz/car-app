@@ -6,7 +6,14 @@ import { OBD, PIDS, PID_KEYS } from './obd/obd';
 import { SimTransport } from './obd/simulator';
 import { BleTransport, ClassicTransport } from './transports/bluetooth';
 import type { ConnKind, Transport } from './transports/types';
-import { activeId, finishTrip, newTrip, odometer, setOdometer, type LiveTrip } from './garage';
+import { activeId, finishTrip, newTrip, odometer, setOdometer, vehicleById, type LiveTrip } from './garage';
+import { checkSignal, resetSignals } from './alerts';
+import { metres, simGps, startGps, stopGps } from './gps';
+import { vehicleSettings } from './settings';
+
+// Signals written to the trip log once a second (when the car supports them), for the trip charts.
+const LOG_KEYS = ['0D', '0C', '11', '04', '05', '0F', '5C', '5E', '10', '42', '0B', '2F'];
+let fakeGps: ReturnType<typeof simGps> | null = null;
 
 export type Status = 'idle' | 'connecting' | 'connected' | 'error';
 
@@ -60,7 +67,7 @@ export const availableKeys = () => PID_KEYS.filter(isSupported) as string[];
 export const val = (k: string) => (S.values[k] && now() - S.values[k].t < 5 ? S.values[k].v : null);
 
 function wantedKeys() {
-  const w = new Set(['0D', '10', '5E', '05', '0F', ...wanted.keys()]); // speed, fuel and temperatures feed the trip log
+  const w = new Set([...LOG_KEYS, ...wanted.keys()]); // the trip log needs these even when no screen shows them
   return [...w].filter(k => isSupported(k) && !S.dead.has(k));
 }
 
@@ -87,6 +94,14 @@ export async function connect(kind: ConnKind, deviceId?: string) {
     S.dead.clear();
     S.values = {};
     S.history = {};
+    S.trip = newTrip(LOG_KEYS.filter(k => isSupported(k)));
+    resetSignals();
+    fakeGps = null;
+    const car = vehicleById(S.vehicle);
+    if (vehicleSettings(S.vehicle, car?.fuel ?? 'petrol').gps) {
+      if (kind === 'sim') fakeGps = simGps();
+      else startGps(addFix);
+    }
     setStatus('connected', elm.protocolName);
     pollLoop();
   } catch (e: any) {
@@ -99,6 +114,8 @@ export async function disconnect() {
   const elm = S.elm;
   S.elm = null;
   setStatus('idle', 'Disconnected');
+  stopGps();
+  fakeGps = null;
   finishTrip(S.trip, S.vehicle);
   S.trip = newTrip();
   try { await elm?.t.close(); } catch {}
@@ -131,6 +148,7 @@ function setValue(k: string, v: number) {
   while (h.length && h[0][0] < t - 120) h.shift();
   if (k === '0D') tripUpdate(v, t);
   if (k === 'A6') setOdometer(v, 'car', S.vehicle);
+  checkSignal(k, v, S.vehicle, meta(k));
   emit();
 }
 
@@ -155,7 +173,17 @@ function tripUpdate(speed: number, t: number) {
   T.max = Math.max(T.max, speed);
   T.startedAt ??= Date.now();
   const last = T.samples[T.samples.length - 1];
-  if (!last || T.time - last[0] >= 1) T.samples.push([T.time, speed, val('05'), val('0F'), fuelRateLh()]);
+  if (!last || T.time - last[0] >= 1) {
+    if (fakeGps && last) addFix(...fakeGps(speed, T.time - last[0]));
+    T.samples.push([T.time, speed, val('05'), val('0F'), fuelRateLh()]);
+    T.log.rows.push([Math.round(T.time * 10) / 10, ...T.log.keys.map(k => { const x = val(k); return x == null ? null : Math.round(x * 100) / 100; })]);
+  }
+}
+
+// Keeps a GPS point when the car has moved at least 15 m since the last one.
+function addFix(lat: number, lng: number) {
+  const p = S.trip.path, prev = p[p.length - 1];
+  if (!prev || metres(prev, [lat, lng]) >= 15) p.push([lat, lng]);
 }
 
 // ---------- one-shot requests (trouble codes, readiness, odometer) ----------

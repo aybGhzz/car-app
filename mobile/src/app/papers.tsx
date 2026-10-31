@@ -1,16 +1,17 @@
-// Ownership: plate, insurance and the annual visite technique, each with a ring counting down to the due date.
+// Papers: plate, insurance and the annual visite technique, each with a ring counting down to the due date.
 import type { ReactNode } from 'react';
 import { Linking, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Ring } from '../../components/Ring';
-import { Screen } from '../../components/Screen';
-import { Button, Card, Pill, PressableScale, T } from '../../components/ui';
-import { dueStatus, fuelLabel, useVehicle, vehicleName, type Due } from '../../lib/garage';
+import { Ring } from '../components/Ring';
+import { Screen } from '../components/Screen';
+import { BackHeader } from '../components/BackHeader';
+import { Button, Card, Pill, PressableScale, T } from '../components/ui';
+import { dueStatus, fuelLabel, useVehicle, vehicleName, type Due } from '../lib/garage';
 import { router } from 'expo-router';
-import { VehicleSwitcher } from '../../components/VehicleSwitcher';
-import { fmtDate, t, useLang } from '../../lib/i18n';
-import { C, KIND_COLOR } from '../../lib/theme';
+import { VehicleSwitcher } from '../components/VehicleSwitcher';
+import { fmtDate, t, useLang } from '../lib/i18n';
+import { C, KIND_COLOR } from '../lib/theme';
 
 const fmtD = (d: string) => (d ? fmtDate(new Date(d + 'T12:00:00').getTime()) : '');
 const Row = ({ k, v }: { k: string; v: ReactNode }) => (
@@ -33,7 +34,7 @@ export default function Car() {
   const edit = () => router.push(`/car-edit/${o.id}`);
 
   return (
-    <Screen title="Ownership">
+    <Screen title="Papers" header={<BackHeader title="Papers" onBack={() => (router.canGoBack() ? router.back() : router.replace('/'))} />}>
       <VehicleSwitcher />
       {/* keyed by vehicle, so switching cars replays the entrance and the countdown rings */}
       <View key={o.id}>

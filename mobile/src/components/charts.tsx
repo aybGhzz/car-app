@@ -55,13 +55,13 @@ function SparkSvg({ d, w, height, len, color, draw }: { d: string; w: number; he
   );
 }
 
-function Bar({ frac, i, label, value }: { frac: number; i: number; label: string; value: string }) {
+function Bar({ frac, i, label, value, height }: { frac: number; i: number; label: string; value: string; height: number }) {
   const h = useSharedValue(0);
   useEffect(() => { h.value = withDelay(120 + i * 70, withSpring(frac, { damping: 13, stiffness: 110 })); }, [frac]);
   const style = useAnimatedStyle(() => ({ height: `${Math.max(0, h.value) * 100}%` }));
   return (
     <View className="flex-1 items-center">
-      <View className="h-36 w-full items-center justify-end">
+      <View style={{ height }} className="w-full items-center justify-end">
         {value ? <Text className="mb-1 text-[11px] font-semibold text-text">{value}</Text> : null}
         <Animated.View style={[{ width: '62%', borderRadius: 8, backgroundColor: C.accent }, style]} />
       </View>
@@ -70,11 +70,11 @@ function Bar({ frac, i, label, value }: { frac: number; i: number; label: string
   );
 }
 
-export function BarChart({ data }: { data: { label: string; value: number }[] }) {
+export function BarChart({ data, height = 144 }: { data: { label: string; value: number }[]; height?: number }) {
   const max = Math.max(1, ...data.map(d => d.value));
   return (
     <View className="flex-row items-end">
-      {data.map((d, i) => <Bar key={d.label} i={i} frac={(d.value / max) * 0.85} label={d.label} value={d.value ? num(d.value) : ''} />)}
+      {data.map((d, i) => <Bar key={d.label} i={i} frac={(d.value / max) * 0.85} label={d.label} value={d.value ? num(d.value) : ''} height={height} />)}
     </View>
   );
 }

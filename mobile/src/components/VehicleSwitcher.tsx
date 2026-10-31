@@ -21,8 +21,8 @@ function Chip({ v, on, onX }: { v: Vehicle; on: boolean; onX: (x: number) => voi
   return (
     <Pressable onLayout={e => onX(e.nativeEvent.layout.x)} onPress={() => { if (!on) { Haptics.selectionAsync().catch(() => {}); selectVehicle(v.id); } }}>
       <Animated.View style={[{ minWidth: 128, maxWidth: 170, borderRadius: 16, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 8, marginRight: 8 }, bg]}>
-        <Text numberOfLines={1} style={{ color: on ? '#001523' : C.text }} className="text-sm font-bold">{v.model || v.make || t('New car')}</Text>
-        <Text numberOfLines={1} style={{ color: on ? '#001523aa' : C.muted }} className="text-[10px] font-semibold">
+        <Text numberOfLines={1} style={{ color: on ? C.onAccent : C.text }} className="text-sm font-bold">{v.model || v.make || t('New car')}</Text>
+        <Text numberOfLines={1} style={{ color: on ? C.onAccent + 'bb' : C.muted }} className="text-[10px] font-semibold">
           {v.plate || [v.make, v.year].filter(Boolean).join(' · ') || t('No plate yet')}
         </Text>
       </Animated.View>
