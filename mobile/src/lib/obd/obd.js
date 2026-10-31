@@ -74,9 +74,11 @@ export const OBD = {
   async bitmap(elm, mode, respSid) {
     const set = new Set();
     for (let base = 0; base <= 0xE0; base += 0x20) {
-      const m = ELM327.messages(await elm.send(mode + hex2(base))).find(m => m[0] === respSid && m[1] === base);
-      if (!m) break;
-      for (let i = 0; i < 32; i++) if (m[2 + (i >> 3)] & (0x80 >> (i & 7))) set.add(base + i + 1);
+      // Several modules can answer (on a BMW E60, the engine and the gearbox): merge all their bitmaps, or the
+      // engine's PIDs (MAF, coolant…) are missed when the gearbox answers first.
+      const ms = ELM327.messages(await elm.send(mode + hex2(base))).filter(m => m[0] === respSid && m[1] === base);
+      if (!ms.length) break;
+      for (const m of ms) for (let i = 0; i < 32; i++) if (m[2 + (i >> 3)] & (0x80 >> (i & 7))) set.add(base + i + 1);
       if (!set.has(base + 0x20)) break;
     }
     return set;
