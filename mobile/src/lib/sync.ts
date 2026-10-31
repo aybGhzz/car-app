@@ -248,7 +248,9 @@ export function startSync() {
     if (OWNERSHIP.test(k)) kv.set('sync.dirty', Date.now());
     if (OWNERSHIP.test(k) || k === 'trips') {
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => { timer = null; syncNow(); }, 4000);
+      // While connected, the car's odometer changes every few hundred metres: wait until it has been still for a
+      // minute (parked) instead of syncing all through the drive.
+      timer = setTimeout(() => { timer = null; syncNow(); }, k.startsWith('odometer.') ? 60_000 : 4000);
     }
   });
   if (syncOn()) syncNow();
