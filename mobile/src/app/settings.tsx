@@ -18,7 +18,6 @@ import { syncNow, useSyncState } from '../lib/sync';
 import { DotsLoader } from '../components/Loaders';
 import { C } from '../lib/theme';
 import Constants from 'expo-constants';
-import { Linking } from 'react-native';
 import { useLive } from '../lib/live';
 
 function Group({ title, scope, icon, children }: { title: string; scope: 'car' | 'app'; icon: any; children: ReactNode }) {
@@ -212,8 +211,7 @@ function About() {
         <Row label="Adapter" sub={elm ? S.message : undefined} last>{val(elm ? (elm.version || 'ELM327') : t('Not connected'))}</Row>
       </Card>
       <Card className="mt-2.5 py-1">
-        <Link label="Source code" sub="github.com/aybGhzz/car-app" onPress={() => Linking.openURL('https://github.com/aybGhzz/car-app')} />
-        <Link label="Web version" sub="aybghzz.github.io/car-app" onPress={() => Linking.openURL('https://aybghzz.github.io/car-app')} last />
+        <Row label="Web version" last>{val('—')}</Row>
       </Card>
       <T className="mt-2.5 px-1 text-xs text-muted">Privacy: your cars, trips and papers stay on this phone, and in your own account when you sign in. Nothing is shared with anyone else.</T>
       <T className="mt-1.5 px-1 text-xs text-muted">Maps © OpenStreetMap contributors, tiles © CARTO. Trouble code texts are searched on the web, not stored in the app.</T>

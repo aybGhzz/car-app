@@ -146,6 +146,11 @@ export const APP_STRINGS: [string, string, string][] = [
   ['After this long with the engine off, even if the adapter stays connected. 0 = never.', 'Après ce délai moteur coupé, même si l’adaptateur reste connecté. 0 = jamais.', 'Tras este tiempo con el motor apagado, aunque el adaptador siga conectado. 0 = nunca.'],
   ['min', 'min', 'min'],
   ['Vindici is recording your trip', 'Vindici enregistre votre trajet', 'Vindici está grabando tu viaje'],
+  ['Continue with Google', 'Continuer avec Google', 'Continuar con Google'],
+  ['Vindici is invite-only for now. Ask for an invitation first.', 'Vindici est sur invitation pour le moment. Demandez d’abord une invitation.', 'Vindici es solo con invitación por ahora. Pide una invitación primero.'],
+  ['Google sign-in is not set up yet.', 'La connexion Google n’est pas encore configurée.', 'El inicio de sesión con Google aún no está configurado.'],
+  ['Google did not return a sign-in token.', 'Google n’a pas renvoyé de jeton de connexion.', 'Google no devolvió un token de inicio de sesión.'],
+  ['Google Play services are needed for Google sign-in.', 'Les services Google Play sont nécessaires pour la connexion Google.', 'Se necesitan los servicios de Google Play para iniciar sesión con Google.'],
 ];
 
 export const APP_PATTERNS: [RegExp, Record<string, (...a: string[]) => string>][] = [

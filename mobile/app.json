@@ -63,7 +63,8 @@
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
         }
-      ]
+      ],
+      "@react-native-google-signin/google-signin"
     ],
     "scheme": "obdscanner",
     "backgroundColor": "#0b0e13",

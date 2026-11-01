@@ -9,7 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DotsLoader } from '../components/Loaders';
 import { Logo } from '../components/Logo';
 import { Button, PressableScale, T } from '../components/ui';
-import { continueAsGuest, resetPassword, signIn } from '../lib/auth';
+import { continueAsGuest, googleEnabled, resetPassword, signIn, signInWithGoogle } from '../lib/auth';
 import { cloudEnabled } from '../lib/supabase';
 import { t, useLang } from '../lib/i18n';
 import { C } from '../lib/theme';
@@ -34,6 +34,14 @@ export default function Login() {
   const [signup, setSignup] = useState(params.mode === 'signup');
   const [name, setName] = useState(''), [email, setEmail] = useState(''), [pw, setPw] = useState('');
   const [busy, setBusy] = useState(false), [err, setErr] = useState(''), [info, setInfo] = useState('');
+
+  async function google() {
+    setErr(''); setInfo(''); setBusy(true);
+    const e = await signInWithGoogle();
+    setBusy(false);
+    if (e) return setErr(e);
+    if (e === null) router.replace('/');
+  }
 
   async function go() {
     setErr(''); setBusy(true);
@@ -68,6 +76,7 @@ export default function Login() {
           {busy ? (
             <View style={{ height: 48 }} className="items-center justify-center rounded-2xl bg-panel"><DotsLoader /></View>
           ) : <Button kind="primary" title={signup ? 'Create account' : 'Sign in'} onPress={go} />}
+          {googleEnabled && !busy ? <Button title="Continue with Google" className="mt-3" onPress={google} /> : null}
           <View className="my-5 flex-row items-center"><View className="h-px flex-1 bg-line" /><T className="mx-3 text-xs text-muted">or</T><View className="h-px flex-1 bg-line" /></View>
           <Button title={signup ? 'I already have an account' : 'Create an account'} onPress={() => { setSignup(!signup); setErr(''); setInfo(''); }} />
           <Text onPress={() => { continueAsGuest(); router.replace('/'); }} className="mt-5 text-center text-sm font-semibold text-muted">{t('Continue without an account')}</Text>
