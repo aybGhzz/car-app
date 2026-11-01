@@ -13,7 +13,7 @@ import { metres, simGps, startGps, stopGps } from './gps';
 import { vehicleSettings, settings } from './settings';
 
 // Signals written to the trip log once a second (when the car supports them), for the trip charts.
-const LOG_KEYS = ['0D', '0C', '11', '04', '05', '0F', '5C', '5E', '10', '42', '0B', '2F'];
+const LOG_KEYS = ['0D', '0C', '11', '04', '05', '0F', '5C', '5E', '10', '42', '0B', '2F', '06', '07', '08', '09'];
 let fakeGps: ReturnType<typeof simGps> | null = null;
 
 export type Status = 'idle' | 'connecting' | 'connected' | 'error';
@@ -181,7 +181,7 @@ function setValue(k: string, v: number) {
   while (h.length && h[0][0] < t - 120) h.shift();
   if ((k === '0C' || k === '0D') && v > 0) S.lastActive = Date.now();
   if (k === '0D') tripUpdate(v, t);
-  if (k === 'A6') setOdometer(v, 'car', S.vehicle);
+  if (k === 'A6' && S.kind !== 'sim') setOdometer(v, 'car', S.vehicle); // the simulator's mileage is not the car's
   checkSignal(k, v, S.vehicle, meta(k));
   emit();
 }
@@ -190,7 +190,13 @@ export function fuelRateLh() {
   const r = val('5E');
   if (r != null) return r;
   const maf = val('10');
-  return maf != null ? (maf * 3600) / (14.7 * 740) : null; // gasoline: stoichiometric AFR 14.7, 740 g/L
+  if (maf == null) return null;
+  // gasoline: stoichiometric AFR 14.7, 740 g/L. The fuel trims say how much fuel the ECU adds on top of what the MAF
+  // implies (an air leak after the MAF, for example), so they correct the estimate. Banks averaged when both report.
+  const bank = (s: string, l: string) => (val(s) != null || val(l) != null ? (val(s) ?? 0) + (val(l) ?? 0) : null);
+  const trims = [bank('06', '07'), bank('08', '09')].filter((x): x is number => x != null);
+  const trim = trims.length ? trims.reduce((a, b) => a + b, 0) / trims.length : 0;
+  return ((maf * 3600) / (14.7 * 740)) * (1 + Math.max(-25, Math.min(40, trim)) / 100);
 }
 
 // The trip in progress is copied to the phone's storage every 15 s, so it survives the app being killed mid-drive.
@@ -199,10 +205,11 @@ export function fuelRateLh() {
 let savedAt = 0;
 function saveLive() {
   savedAt = Date.now();
+  if (S.kind === 'sim') return;
   kv.set('liveTrip', { trip: S.trip, vehicle: S.vehicle, at: savedAt });
 }
 function closeLive(end?: number) {
-  finishTrip(S.trip, S.vehicle, end);
+  if (S.kind !== 'sim') finishTrip(S.trip, S.vehicle, end); // simulated drives are never saved to a real car
   kv.remove('liveTrip');
   savedAt = 0;
 }
