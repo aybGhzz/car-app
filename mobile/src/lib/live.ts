@@ -63,7 +63,9 @@ export function useWantedPids(keys: string[]) {
     return () => keys.forEach(k => { const n = (wanted.get(k) ?? 1) - 1; n ? wanted.set(k, n) : wanted.delete(k); });
   }, [sig]);
 }
-export const isSupported = (k: string) => !S.supported || S.supported.has(parseInt(k, 16));
+// Battery voltage (42) is always available: when the engine ECU doesn't report it, the adapter measures it (ATRV).
+export const isSupported = (k: string) => !S.supported || k === '42' || S.supported.has(parseInt(k, 16));
+const adapterVolts = () => !!S.supported && !S.supported.has(0x42);
 export const availableKeys = () => PID_KEYS.filter(isSupported) as string[];
 export const val = (k: string) => (S.values[k] && now() - S.values[k].t < 5 ? S.values[k].v : null);
 
@@ -136,7 +138,9 @@ async function pollLoop() {
     for (const k of order) {
       if (!S.elm || busy) break;
       try {
-        const v = await OBD.value(S.elm, k);
+        const v = k === '42' && adapterVolts()
+          ? parseFloat((await S.elm.text('ATRV')).replace(/[^0-9.]/g, '')) || null
+          : await OBD.value(S.elm, k);
         if (v == null) { if ((fails[k] = (fails[k] || 0) + 1) >= 5) S.dead.add(k); continue; }
         fails[k] = 0;
         setValue(k, v);
