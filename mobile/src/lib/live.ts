@@ -9,7 +9,7 @@ import type { ConnKind, Transport } from './transports/types';
 import { activeId, finishTrip, newTrip, odometer, setOdometer, vehicleById, type LiveTrip } from './garage';
 import { checkSignal, resetSignals } from './alerts';
 import { metres, simGps, startGps, stopGps } from './gps';
-import { vehicleSettings } from './settings';
+import { vehicleSettings, settings } from './settings';
 
 // Signals written to the trip log once a second (when the car supports them), for the trip charts.
 const LOG_KEYS = ['0D', '0C', '11', '04', '05', '0F', '5C', '5E', '10', '42', '0B', '2F'];
@@ -34,6 +34,8 @@ export const S = {
   dead: new Set<string>(),
   values: {} as Record<string, { v: number; t: number }>,
   history: {} as Record<string, [number, number][]>,
+  lastActive: 0, // last time the engine turned or the car moved, for ending a trip automatically
+  stats: {} as Record<string, { min: number; max: number; sum: number; n: number }>, // since connecting, for min / avg / max
   trip: newTrip() as LiveTrip,
   version: 0, // bumped on every change; components subscribe to it
 };
@@ -100,14 +102,15 @@ export async function connect(kind: ConnKind, deviceId?: string) {
     S.dead.clear();
     S.values = {};
     S.history = {};
+    S.stats = {};
     S.trip = newTrip(LOG_KEYS.filter(k => isSupported(k)));
     resetSignals();
     fakeGps = null;
     const car = vehicleById(S.vehicle);
-    if (vehicleSettings(S.vehicle, car?.fuel ?? 'petrol').gps) {
-      if (kind === 'sim') fakeGps = simGps();
-      else startGps(addFix);
-    }
+    const gps = vehicleSettings(S.vehicle, car?.fuel ?? 'petrol').gps;
+    if (kind === 'sim') { if (gps) fakeGps = simGps(); }
+    else startGps(addFix, gps); // also keeps recording in the background (see gps.ts)
+    S.lastActive = Date.now();
     setStatus('connected', elm.protocolName + (pick.ecu ? ' · ECU ' + pick.ecu : ''));
     pollLoop();
   } catch (e: any) {
@@ -141,7 +144,7 @@ async function pollLoop() {
         const v = k === '42' && adapterVolts()
           ? parseFloat((await S.elm.text('ATRV')).replace(/[^0-9.]/g, '')) || null
           : await OBD.value(S.elm, k);
-        if (v == null) { if ((fails[k] = (fails[k] || 0) + 1) >= 5) S.dead.add(k); continue; }
+        if (v == null) { if ((fails[k] = (fails[k] || 0) + 1) >= 5 && k !== '0C' && k !== '0D') S.dead.add(k); continue; } // rpm and speed stay polled: they tell when the engine starts again
         fails[k] = 0;
         setValue(k, v);
       } catch {
@@ -150,15 +153,32 @@ async function pollLoop() {
       }
     }
     await sleep(busy ? 200 : 20);
+    autoEnd();
   }
+}
+
+// Ends and saves the trip when the engine has been off (rpm 0 or no answer) and the car still for the time set in
+// Settings > Trips, while the adapter stays connected. A new trip starts when the engine turns again.
+function autoEnd() {
+  const min = settings().autoEndMin;
+  if (!min || !S.trip.samples.length || Date.now() - S.lastActive < min * 60_000) return;
+  finishTrip(S.trip, S.vehicle);
+  S.trip = newTrip(LOG_KEYS.filter(k => isSupported(k)));
+  S.dead.clear(); // signals that stopped answering with the engine off get another chance
+  S.stats = {};
+  emit(true);
 }
 
 function setValue(k: string, v: number) {
   const t = now();
   S.values[k] = { v, t };
+  const st = S.stats[k];
+  if (st) { st.min = Math.min(st.min, v); st.max = Math.max(st.max, v); st.sum += v; st.n++; }
+  else S.stats[k] = { min: v, max: v, sum: v, n: 1 };
   const h = (S.history[k] ??= []);
   h.push([t, v]);
   while (h.length && h[0][0] < t - 120) h.shift();
+  if ((k === '0C' || k === '0D') && v > 0) S.lastActive = Date.now();
   if (k === '0D') tripUpdate(v, t);
   if (k === 'A6') setOdometer(v, 'car', S.vehicle);
   checkSignal(k, v, S.vehicle, meta(k));

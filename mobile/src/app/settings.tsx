@@ -17,6 +17,9 @@ import { cloudEnabled } from '../lib/supabase';
 import { syncNow, useSyncState } from '../lib/sync';
 import { DotsLoader } from '../components/Loaders';
 import { C } from '../lib/theme';
+import Constants from 'expo-constants';
+import { Linking } from 'react-native';
+import { useLive } from '../lib/live';
 
 function Group({ title, scope, icon, children }: { title: string; scope: 'car' | 'app'; icon: any; children: ReactNode }) {
   return (
@@ -90,6 +93,14 @@ export default function Settings() {
         </Card>
       </Group>
 
+      <Group title="Trips" scope="app" icon="map">
+        <Card className="py-1">
+          <Row label="End the trip automatically" sub="After this long with the engine off, even if the adapter stays connected. 0 = never." last>
+            <Num value={cfg.autoEndMin} unit="min" onChange={v => setSetting('autoEndMin', Math.max(0, Math.round(v)))} />
+          </Row>
+        </Card>
+      </Group>
+
       <Group title="Notifications" scope="app" icon="notifications">
         <Card className="py-1">
           <Row label="Notifications" sub="Every alert rule"><Toggle value={cfg.notifications} onChange={v => setSetting('notifications', v)} /></Row>
@@ -144,7 +155,11 @@ export default function Settings() {
         </Card>
       </Group>
 
-      <T className="mt-6 text-center text-xs text-muted">Vindici · version 1.0 · proof of concept</T>
+      <Group title="About" scope="app" icon="information-circle">
+        <About />
+      </Group>
+
+      <T className="mt-6 text-center text-xs text-muted">Vindici · proof of concept</T>
     </Screen>
   );
 }
@@ -175,5 +190,33 @@ function CloudSync() {
         <Button title="Sync" onPress={() => syncNow()} />
       </Row>
     </Card>
+  );
+}
+
+// App version, the build it came from, the adapter in use, links and credits.
+function About() {
+  useLang();
+  const S = useLive();
+  const cfg = Constants.expoConfig, extra = (cfg?.extra ?? {}) as { commit?: string | null; builtAt?: string };
+  const commit = typeof extra.commit === 'string' && extra.commit ? extra.commit : null;
+  const built = typeof extra.builtAt === 'string' ? Date.parse(extra.builtAt) : null;
+  const val = (v: string) => <Text className="max-w-[60%] text-right font-semibold text-text" numberOfLines={2}>{v}</Text>;
+  const elm = S.status === 'connected' ? (S as any).elm : null;
+  return (
+    <>
+      <Card className="py-1">
+        <Row label="Version">{val(cfg?.version ?? '—')}</Row>
+        <Row label="Build" sub={built ? fmtDate(built) + ' · ' + fmtTime(built) : undefined}>{val(commit ?? (Platform.OS === 'web' ? 'Web' : t('Local build')))}</Row>
+        <Row label="Platform">{val(Platform.OS === 'web' ? 'Web' : `${Platform.OS === 'ios' ? 'iOS' : 'Android'} ${Platform.Version}`)}</Row>
+        <Row label="Package">{val(cfg?.android?.package ?? cfg?.ios?.bundleIdentifier ?? '—')}</Row>
+        <Row label="Adapter" sub={elm ? S.message : undefined} last>{val(elm ? (elm.version || 'ELM327') : t('Not connected'))}</Row>
+      </Card>
+      <Card className="mt-2.5 py-1">
+        <Link label="Source code" sub="github.com/aybGhzz/car-app" onPress={() => Linking.openURL('https://github.com/aybGhzz/car-app')} />
+        <Link label="Web version" sub="aybghzz.github.io/car-app" onPress={() => Linking.openURL('https://aybghzz.github.io/car-app')} last />
+      </Card>
+      <T className="mt-2.5 px-1 text-xs text-muted">Privacy: your cars, trips and papers stay on this phone, and in your own account when you sign in. Nothing is shared with anyone else.</T>
+      <T className="mt-1.5 px-1 text-xs text-muted">Maps © OpenStreetMap contributors, tiles © CARTO. Trouble code texts are searched on the web, not stored in the app.</T>
+    </>
   );
 }

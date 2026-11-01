@@ -10,7 +10,7 @@ import { Gauge } from '../../components/Gauge';
 import { Screen } from '../../components/Screen';
 import { VehicleSwitcher } from '../../components/VehicleSwitcher';
 import { Sheet } from '../../components/Sheet';
-import { Button, Card, PressableScale, SectionTitle, StatTile, Swatches, T } from '../../components/ui';
+import { Button, Card, PressableScale, SectionTitle, StatTile, Swatches, T, Toggle } from '../../components/ui';
 import { RuleDot, RuleEditor, ruleText } from '../../components/RuleEditor';
 import { newRuleId, ruleColor, useRules, type SignalRule } from '../../lib/alerts';
 import { useVehicle } from '../../lib/garage';
@@ -63,7 +63,7 @@ export default function Dashboard() {
   const S = useLive();
   const width = useAppWidth();
   const gauges = useStored<string[]>('gauges', DEFAULT_GAUGES);
-  const styles = useStored<Record<string, { color?: string }>>('gaugeStyle', {});
+  const styles = useStored<Record<string, { color?: string; stats?: boolean }>>('gaugeStyle', {});
   const rules = useRules();
   const car = useVehicle();
   const vs = useVehicleSettings(S.vehicle || car.id, car.fuel);
@@ -111,6 +111,7 @@ export default function Dashboard() {
                 {/* a matching rule sets the colour; without rules the gauge keeps its own colour */}
                 <Gauge value={v} min={m.min} max={m.max} unit={m.unit} label={m.name} dp={m.dp} size={small} color={alert ?? base}
                   redFrom={rules.some(r => r.pid === k && r.color) ? 2 : 0.85} />
+                {styles[k]?.stats !== false ? <MinMax k={k} dp={m.dp} width={small} /> : null}
                 </View>
               </PressableScale>
             </Animated.View>
@@ -154,7 +155,15 @@ export default function Dashboard() {
               </PressableScale>
 
               <T className="mb-1.5 text-xs text-muted">Colour</T>
-              <View className="mb-4"><Swatches value={styles[k]?.color ?? C.accent} onChange={color => kv.set('gaugeStyle', { ...styles, [k]: { color } })} /></View>
+              <View className="mb-4"><Swatches value={styles[k]?.color ?? C.accent} onChange={color => kv.set('gaugeStyle', { ...styles, [k]: { ...styles[k], color } })} /></View>
+
+              <View className="mb-4 flex-row items-center rounded-2xl border border-line bg-panel2 px-4 py-3">
+                <View className="flex-1">
+                  <T className="font-semibold">Show min / avg / max</T>
+                  <T className="text-xs text-muted">Since connecting</T>
+                </View>
+                <Toggle value={styles[k]?.stats !== false} onChange={v => kv.set('gaugeStyle', { ...styles, [k]: { ...styles[k], stats: v } })} />
+              </View>
 
               <T className="mb-1 text-xs text-muted">Colour changes and alerts</T>
               {mine.map(r => (
@@ -186,6 +195,22 @@ function Mini({ label, value, unit }: { label: string; value: string; unit: stri
     <View className="items-center">
       <Text style={{ fontVariant: ['tabular-nums'] }} className="text-2xl font-extrabold text-text">{value}</Text>
       <Text className="text-[11px] text-muted">{t(unit)} · {t(label)}</Text>
+    </View>
+  );
+}
+
+// Min / avg / max of a signal since connecting, under its gauge (like a scan tool's tiles).
+function MinMax({ k, dp, width }: { k: string; dp: number; width: number }) {
+  const st = useLive().stats[k];
+  const f = (v?: number) => (v == null ? '—' : num(v, dp));
+  return (
+    <View style={{ width }} className="mt-1 flex-row justify-between">
+      {([['Min', st?.min], ['Avg', st ? st.sum / st.n : undefined], ['Max', st?.max]] as const).map(([l, v]) => (
+        <View key={l} className="items-center">
+          <Text style={{ fontVariant: ['tabular-nums'] }} className="text-xs font-bold text-text">{f(v)}</Text>
+          <Text className="text-[10px] text-muted">{t(l)}</Text>
+        </View>
+      ))}
     </View>
   );
 }
