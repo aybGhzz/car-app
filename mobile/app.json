@@ -51,7 +51,7 @@
         "expo-build-properties",
         {
           "android": {
-            "extraProguardRules": "-keep class androidx.work.** { *; }\n-keep class androidx.room.** { *; }\n-keep class * extends androidx.room.RoomDatabase { *; }\n-keep class **_Impl { *; }"
+            "extraProguardRules": "-keep class androidx.work.** { *; }\n-keep class androidx.room.** { *; }\n-keep class * extends androidx.room.RoomDatabase { *; }\n-keep class **_Impl { *; }\n-keep class org.maplibre.** { *; }"
           }
         }
       ],
@@ -64,7 +64,8 @@
           "isAndroidForegroundServiceEnabled": true
         }
       ],
-      "@react-native-google-signin/google-signin"
+      "@react-native-google-signin/google-signin",
+      "@maplibre/maplibre-react-native"
     ],
     "scheme": "obdscanner",
     "backgroundColor": "#0b0e13",
