@@ -97,7 +97,7 @@ export const continueAsGuest = () => kv.set('user', { name: 'Guest', email: '', 
 // on this phone stay.
 export async function signOut() {
   kv.remove('user');
-  for (const k of ['cloudTrips', 'sync.state', 'sync.ids', 'sync.pushedTrips', 'sync.known', 'sync.dirty']) kv.remove(k);
+  for (const k of ['cloudTrips', 'sync.state', 'sync.ids', 'sync.pushedTrips', 'sync.known', 'sync.dirty', 'sync.base']) kv.remove(k);
   await supabase?.auth.signOut().catch(() => {});
   if (googleEnabled) await GoogleSignin.signOut().catch(() => {});
 }

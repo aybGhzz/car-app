@@ -52,6 +52,23 @@ function vehicleFrom(r: any, local?: Vehicle): Vehicle {
   };
 }
 
+// A car's synced fields in one comparable shape (numbers as numbers, dates as ms, empty text as null).
+type Row = Record<string, any>;
+const FIELDS = ['make', 'model', 'year', 'plate', 'vin', 'engine', 'fuel', 'gearbox', 'note', 'odometer_km', 'odometer_source', 'odometer_at',
+  'fuel_price', 'ins_company', 'ins_policy', 'ins_phone', 'ins_start', 'ins_expiry', 'vt_last', 'vt_next', 'vt_result', 'vt_center'];
+const NUM = new Set(['odometer_km', 'fuel_price']);
+function norm(r: Row): Row {
+  const o: Row = {};
+  for (const f of FIELDS) {
+    const v = r[f];
+    o[f] = v == null || v === '' ? null : f === 'odometer_at' ? (typeof v === 'number' ? v : Date.parse(v) || null) : NUM.has(f) ? Number(v) : String(v);
+  }
+  return o;
+}
+// the account's copy of each car at the last sync, to tell which fields were edited on this phone since
+const bases = () => kv.get<Record<string, Row>>('sync.base', {});
+const toDb = (o: Row) => ({ ...o, odometer_at: o.odometer_at != null ? new Date(o.odometer_at).toISOString() : o.odometer_at });
+
 const TRIP_COLS = 'id,local_id,source,vehicle_id,started_at,ended_at,distance_km,duration_s,moving_s,avg_speed_kmh,max_speed_kmh,fuel_l,'
   + 'city_pct,road_pct,highway_pct,start_lat,start_lng,end_lat,end_lng,start_place,end_place,car,'
   + 'coolant_avg:metrics->>avg_coolant_temp_c,coolant_max:metrics->>max_coolant_temp_c';
@@ -101,30 +118,47 @@ async function pull(user: string) {
   if (sr.error) throw sr.error;
 
   const dirty = kv.get<number | null>('sync.dirty', null) != null;
+  const map: Record<string, string> = {}, vehicleOf: Record<string, string> = {};
+  for (const r of vr.data) { map[r.local_id] = r.id; vehicleOf[r.id] = r.local_id; }
+  applying = true; // the writes below come from the account, they are not edits made on the phone
+  try {
+  kv.set('sync.ids', map);
   const known = new Set(kv.get<string[]>('sync.known', []));
   const local = kv.get<Vehicle[]>('vehicles', []);
   const byLocal = new Map(local.map(v => [v.id, v]));
-  const map: Record<string, string> = {}, vehicleOf: Record<string, string> = {};
-  for (const r of vr.data) { map[r.local_id] = r.id; vehicleOf[r.id] = r.local_id; }
-  kv.set('sync.ids', map);
+  const base = { ...bases() };
 
-  // cars added on another phone (in the account, never seen here) are always added
-  const added = vr.data.filter(r => !byLocal.has(r.local_id) && !known.has(r.local_id)).map(r => vehicleFrom(r));
-  if (dirty) {
-    if (added.length) kv.set('vehicles', [...local, ...added]);
-  } else {
-    // the account's cars over the phone's; cars only on the phone stay (they are uploaded next)
-    const merged = local.map(v => (map[v.id] ? vehicleFrom(vr.data.find(r => r.local_id === v.id), v) : v))
-      .filter(v => map[v.id] || !known.has(v.id)) // known before but gone from the account: deleted on another phone
-      .concat(added);
-    if (merged.length) kv.set('vehicles', merged);
-    for (const r of vr.data) {
-      if (r.odometer_km != null) kv.set('odometer.' + r.local_id, { value: Number(r.odometer_km), source: r.odometer_source ?? 'manual', at: r.odometer_at ? Date.parse(r.odometer_at) : 0 });
-      if (r.fuel_price != null) kv.set('fuelPrice.' + r.local_id, Number(r.fuel_price));
-      const items = sr.data.filter(s => s.vehicle_id === r.id);
-      if (items.length) kv.set(serviceKey(r.local_id), items.map(s => ({ id: s.local_id.split('/').pop(), name: s.name, interval: s.interval_km ?? 0, last: s.last_km ?? 0, next: s.next_km ?? 0 } satisfies ServiceItem)));
+  // Each car is merged field by field: a field edited on this phone since the last sync keeps the phone's value,
+  // every other field takes the account's value. So a phone with an old copy can no longer blank another phone's edits.
+  const mergedCars: Vehicle[] = [];
+  for (const v of local) {
+    const r = vr.data.find(x => x.local_id === v.id);
+    if (!r) { if (!known.has(v.id)) mergedCars.push(v); continue; } // known before but gone from the account: deleted elsewhere
+    const remote = norm(r), mine = norm(vehicleRow(v, user)), was = base[v.id];
+    const out: Row = {};
+    for (const f of FIELDS) {
+      const edited = was ? mine[f] !== was[f] : false; // first sync on this phone: the account wins wherever it has a value
+      out[f] = edited ? mine[f] : remote[f] ?? mine[f]; // a field cleared on this phone stays cleared
     }
+    mergedCars.push(vehicleFrom({ ...out, local_id: v.id }, v));
+    if (out.odometer_km != null) kv.set('odometer.' + v.id, { value: Number(out.odometer_km), source: out.odometer_source ?? 'manual', at: Number(out.odometer_at ?? 0) });
+    if (out.fuel_price != null) kv.set('fuelPrice.' + v.id, Number(out.fuel_price));
+    base[v.id] = remote;
   }
+  // cars added on another phone (in the account, never seen here) are always added
+  for (const r of vr.data) if (!byLocal.has(r.local_id) && !known.has(r.local_id)) {
+    mergedCars.push(vehicleFrom(r));
+    if (r.odometer_km != null) kv.set('odometer.' + r.local_id, { value: Number(r.odometer_km), source: r.odometer_source ?? 'manual', at: r.odometer_at ? Date.parse(r.odometer_at) : 0 });
+    if (r.fuel_price != null) kv.set('fuelPrice.' + r.local_id, Number(r.fuel_price));
+    base[r.local_id] = norm(r);
+  }
+  if (mergedCars.length) kv.set('vehicles', mergedCars);
+  kv.set('sync.base', base);
+  if (!dirty) for (const r of vr.data) {
+    const items = sr.data.filter(s => s.vehicle_id === r.id);
+    if (items.length) kv.set(serviceKey(r.local_id), items.map(s => ({ id: s.local_id.split('/').pop(), name: s.name, interval: s.interval_km ?? 0, last: s.last_km ?? 0, next: s.next_km ?? 0 } satisfies ServiceItem)));
+  }
+  } finally { applying = false; }
 
   // trips: everything in the account, newest first, in pages of 1000
   const rows: any[] = [];
@@ -135,23 +169,41 @@ async function pull(user: string) {
     if (data.length < 1000) break;
   }
   const prev = new Map(kv.get<Trip[]>('cloudTrips', []).map(tr => [tr.cloudId, tr]));
+  applying = true;
+  try {
   kv.set('cloudTrips', rows.map(r => {
     const tr = tripFrom(r, vehicleOf), old = prev.get(r.id);
     return old?.samples.length ? { ...tr, samples: old.samples, path: old.path, log: old.log } : tr; // keep a trace already downloaded
   }));
   kv.set('sync.pushedTrips', [...new Set([...kv.get<string[]>('sync.pushedTrips', []), ...rows.filter(r => r.local_id).map(r => r.local_id)])]);
+  } finally { applying = false; }
 }
 
 // ---------- push ----------
 async function pushOwnership(user: string) {
+  const stamp = kv.get<number | null>('sync.dirty', null);
   const db = supabase!, list = kv.get<Vehicle[]>('vehicles', []);
-  if (list.length) {
-    const { data, error } = await db.from('vehicles').upsert(list.map(v => vehicleRow(v, user)), { onConflict: 'user_id,local_id' }).select('id,local_id');
+  const base = { ...bases() }, fresh = list.filter(v => !ids()[v.id] || !base[v.id]);
+  if (fresh.length) { // new cars (or not synced since this update): the whole car
+    const { data, error } = await db.from('vehicles').upsert(fresh.map(v => vehicleRow(v, user)), { onConflict: 'user_id,local_id' }).select('id,local_id');
     if (error) throw error;
     const map = { ...ids() };
     for (const r of data) map[r.local_id] = r.id;
     kv.set('sync.ids', map);
+    for (const v of fresh) base[v.id] = norm(vehicleRow(v, user));
   }
+  for (const v of list) { // other cars: only the fields edited on this phone
+    if (fresh.includes(v) || !ids()[v.id]) continue;
+    const mine = norm(vehicleRow(v, user)), was = base[v.id], diff: Row = {};
+    for (const f of FIELDS) if (mine[f] !== was[f]) diff[f] = mine[f];
+    if (!Object.keys(diff).length) continue;
+    const { error } = await db.from('vehicles').update({ ...toDb(diff), updated_at: new Date().toISOString() }).eq('id', ids()[v.id]);
+    if (error) throw error;
+    base[v.id] = { ...was, ...diff };
+  }
+  applying = true;
+  kv.set('sync.base', base);
+  applying = false;
   const map = ids(), now = new Date().toISOString();
   // cars deleted on this phone
   const gone = Object.keys(map).filter(id => !list.some(v => v.id === id));
@@ -177,8 +229,11 @@ async function pushOwnership(user: string) {
     const { error } = await q;
     if (error) throw error;
   }
+  applying = true;
   kv.set('sync.known', list.map(v => v.id));
-  kv.remove('sync.dirty');
+  applying = false;
+  // an edit made while this upload ran keeps its mark, so the next pull does not overwrite it
+  if (kv.get<number | null>('sync.dirty', null) === stamp) kv.remove('sync.dirty');
 }
 
 async function pushTrips(user: string) {
@@ -196,10 +251,13 @@ async function pushTrips(user: string) {
 
 // ---------- public ----------
 let running: Promise<void> | null = null;
+let again = false; // a sync was asked for while one was running: run once more after it
+let applying = false; // true while a pull writes the account's data into the phone
 export function syncNow(): Promise<void> {
   const user = uid();
   if (!supabase || !user) return Promise.resolve();
-  return (running ??= (async () => {
+  if (running) { again = true; return running; }
+  return (running = (async () => {
     setState({ busy: true, error: null });
     try {
       await pull(user);
@@ -210,6 +268,7 @@ export function syncNow(): Promise<void> {
       setState({ busy: false, error: e?.message ?? String(e) });
     } finally {
       running = null;
+      if (again) { again = false; syncNow(); }
     }
   })());
 }
@@ -244,7 +303,7 @@ export function startSync() {
       lastUser = u;
       return;
     }
-    if (!syncOn() || running) return; // changes made by a pull are not local edits
+    if (!syncOn() || applying) return; // changes made by a pull are not local edits
     if (OWNERSHIP.test(k)) kv.set('sync.dirty', Date.now());
     if (OWNERSHIP.test(k) || k === 'trips') {
       if (timer) clearTimeout(timer);
