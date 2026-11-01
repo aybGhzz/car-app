@@ -12,8 +12,9 @@ export type Settings = {
   notifications: boolean; // master switch for every alert rule
   demo: boolean; // show the sample trips
   theme: ThemeId;
+  autoEndMin: number; // end and save a trip after this many minutes with the engine off while still connected (0 = never)
 };
-export const SETTINGS_DEFAULT: Settings = { currency: 'MAD', search: 'google', popups: true, notifications: true, demo: true, theme: 'vindici' };
+export const SETTINGS_DEFAULT: Settings = { currency: 'MAD', search: 'google', popups: true, notifications: true, demo: true, theme: 'vindici', autoEndMin: 5 };
 
 export const useSettings = () => ({ ...SETTINGS_DEFAULT, ...useStored<Partial<Settings>>('settings', {}) });
 export const settings = (): Settings => ({ ...SETTINGS_DEFAULT, ...kv.get<Partial<Settings>>('settings', {}) });

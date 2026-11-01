@@ -7,12 +7,13 @@ import { SimTransport } from './obd/simulator';
 import { BleTransport, ClassicTransport } from './transports/bluetooth';
 import type { ConnKind, Transport } from './transports/types';
 import { activeId, finishTrip, newTrip, odometer, setOdometer, vehicleById, type LiveTrip } from './garage';
+import { kv } from './store';
 import { checkSignal, resetSignals } from './alerts';
 import { metres, simGps, startGps, stopGps } from './gps';
-import { vehicleSettings } from './settings';
+import { vehicleSettings, settings } from './settings';
 
 // Signals written to the trip log once a second (when the car supports them), for the trip charts.
-const LOG_KEYS = ['0D', '0C', '11', '04', '05', '0F', '5C', '5E', '10', '42', '0B', '2F'];
+const LOG_KEYS = ['0D', '0C', '11', '04', '05', '0F', '5C', '5E', '10', '42', '0B', '2F', '06', '07', '08', '09'];
 let fakeGps: ReturnType<typeof simGps> | null = null;
 
 export type Status = 'idle' | 'connecting' | 'connected' | 'error';
@@ -30,9 +31,12 @@ export const S = {
   vehicle: '', // the car selected when connecting: its odometer and trips get the live data, even if another car is selected later
   elm: null as any,
   supported: null as Set<number> | null,
+  ecu: null as string | null, // the module the live data comes from (see OBD.pickEcu)
   dead: new Set<string>(),
   values: {} as Record<string, { v: number; t: number }>,
   history: {} as Record<string, [number, number][]>,
+  lastActive: 0, // last time the engine turned or the car moved, for ending a trip automatically
+  stats: {} as Record<string, { min: number; max: number; sum: number; n: number }>, // since connecting, for min / avg / max
   trip: newTrip() as LiveTrip,
   version: 0, // bumped on every change; components subscribe to it
 };
@@ -62,7 +66,9 @@ export function useWantedPids(keys: string[]) {
     return () => keys.forEach(k => { const n = (wanted.get(k) ?? 1) - 1; n ? wanted.set(k, n) : wanted.delete(k); });
   }, [sig]);
 }
-export const isSupported = (k: string) => !S.supported || S.supported.has(parseInt(k, 16));
+// Battery voltage (42) is always available: when the engine ECU doesn't report it, the adapter measures it (ATRV).
+export const isSupported = (k: string) => !S.supported || k === '42' || S.supported.has(parseInt(k, 16));
+const adapterVolts = () => !!S.supported && !S.supported.has(0x42);
 export const availableKeys = () => PID_KEYS.filter(isSupported) as string[];
 export const val = (k: string) => (S.values[k] && now() - S.values[k].t < 5 ? S.values[k].v : null);
 
@@ -90,19 +96,23 @@ export async function connect(kind: ConnKind, deviceId?: string) {
     setStatus('connecting', 'Initializing adapter and detecting protocol…');
     await elm.init();
     S.elm = elm;
-    S.supported = await OBD.bitmap(elm, '01', 0x41);
+    setStatus('connecting', 'Finding the engine module…');
+    const pick = await OBD.pickEcu(elm, [...LOG_KEYS, 'A6']);
+    S.supported = pick.supported;
+    S.ecu = pick.ecu;
     S.dead.clear();
     S.values = {};
     S.history = {};
+    S.stats = {};
     S.trip = newTrip(LOG_KEYS.filter(k => isSupported(k)));
     resetSignals();
     fakeGps = null;
     const car = vehicleById(S.vehicle);
-    if (vehicleSettings(S.vehicle, car?.fuel ?? 'petrol').gps) {
-      if (kind === 'sim') fakeGps = simGps();
-      else startGps(addFix);
-    }
-    setStatus('connected', elm.protocolName);
+    const gps = vehicleSettings(S.vehicle, car?.fuel ?? 'petrol').gps;
+    if (kind === 'sim') { if (gps) fakeGps = simGps(); }
+    else startGps(addFix, gps); // also keeps recording in the background (see gps.ts)
+    S.lastActive = Date.now();
+    setStatus('connected', elm.protocolName + (pick.ecu ? ' · ECU ' + pick.ecu : ''));
     pollLoop();
   } catch (e: any) {
     setStatus('error', e?.message ?? String(e));
@@ -116,7 +126,7 @@ export async function disconnect() {
   setStatus('idle', 'Disconnected');
   stopGps();
   fakeGps = null;
-  finishTrip(S.trip, S.vehicle);
+  closeLive();
   S.trip = newTrip();
   try { await elm?.t.close(); } catch {}
 }
@@ -124,11 +134,18 @@ export async function disconnect() {
 async function pollLoop() {
   const fails: Record<string, number> = {};
   while (S.elm) {
-    for (const k of wantedKeys()) {
+    // Speed drives the trip distance, so read it between every few other signals: on a slow adapter or an older
+    // car (K-line), a full round of signals can take several seconds.
+    const keys = wantedKeys(), order: string[] = [];
+    keys.filter(k => k !== '0D').forEach((k, i) => { if (keys.includes('0D') && i % 3 === 0) order.push('0D'); order.push(k); });
+    if (!order.length && keys.includes('0D')) order.push('0D');
+    for (const k of order) {
       if (!S.elm || busy) break;
       try {
-        const v = await OBD.value(S.elm, k);
-        if (v == null) { if ((fails[k] = (fails[k] || 0) + 1) >= 5) S.dead.add(k); continue; }
+        const v = k === '42' && adapterVolts()
+          ? parseFloat((await S.elm.text('ATRV')).replace(/[^0-9.]/g, '')) || null
+          : await OBD.value(S.elm, k);
+        if (v == null) { if ((fails[k] = (fails[k] || 0) + 1) >= 5 && k !== '0C' && k !== '0D') S.dead.add(k); continue; } // rpm and speed stay polled: they tell when the engine starts again
         fails[k] = 0;
         setValue(k, v);
       } catch {
@@ -137,17 +154,34 @@ async function pollLoop() {
       }
     }
     await sleep(busy ? 200 : 20);
+    autoEnd();
   }
+}
+
+// Ends and saves the trip when the engine has been off (rpm 0 or no answer) and the car still for the time set in
+// Settings > Trips, while the adapter stays connected. A new trip starts when the engine turns again.
+function autoEnd() {
+  const min = settings().autoEndMin;
+  if (!min || !S.trip.samples.length || Date.now() - S.lastActive < min * 60_000) return;
+  closeLive();
+  S.trip = newTrip(LOG_KEYS.filter(k => isSupported(k)));
+  S.dead.clear(); // signals that stopped answering with the engine off get another chance
+  S.stats = {};
+  emit(true);
 }
 
 function setValue(k: string, v: number) {
   const t = now();
   S.values[k] = { v, t };
+  const st = S.stats[k];
+  if (st) { st.min = Math.min(st.min, v); st.max = Math.max(st.max, v); st.sum += v; st.n++; }
+  else S.stats[k] = { min: v, max: v, sum: v, n: 1 };
   const h = (S.history[k] ??= []);
   h.push([t, v]);
   while (h.length && h[0][0] < t - 120) h.shift();
+  if ((k === '0C' || k === '0D') && v > 0) S.lastActive = Date.now();
   if (k === '0D') tripUpdate(v, t);
-  if (k === 'A6') setOdometer(v, 'car', S.vehicle);
+  if (k === 'A6' && S.kind !== 'sim') setOdometer(v, 'car', S.vehicle); // the simulator's mileage is not the car's
   checkSignal(k, v, S.vehicle, meta(k));
   emit();
 }
@@ -156,12 +190,39 @@ export function fuelRateLh() {
   const r = val('5E');
   if (r != null) return r;
   const maf = val('10');
-  return maf != null ? (maf * 3600) / (14.7 * 740) : null; // gasoline: stoichiometric AFR 14.7, 740 g/L
+  if (maf == null) return null;
+  // gasoline: stoichiometric AFR 14.7, 740 g/L. The fuel trims say how much fuel the ECU adds on top of what the MAF
+  // implies (an air leak after the MAF, for example), so they correct the estimate. Banks averaged when both report.
+  const bank = (s: string, l: string) => (val(s) != null || val(l) != null ? (val(s) ?? 0) + (val(l) ?? 0) : null);
+  const trims = [bank('06', '07'), bank('08', '09')].filter((x): x is number => x != null);
+  const trim = trims.length ? trims.reduce((a, b) => a + b, 0) / trims.length : 0;
+  return ((maf * 3600) / (14.7 * 740)) * (1 + Math.max(-25, Math.min(40, trim)) / 100);
+}
+
+// The trip in progress is copied to the phone's storage every 15 s, so it survives the app being killed mid-drive.
+// It is saved as a normal trip (and uploaded) when it ends: Disconnect, engine off for the set time, or at the next
+// start if the app was killed.
+let savedAt = 0;
+function saveLive() {
+  savedAt = Date.now();
+  if (S.kind === 'sim') return;
+  kv.set('liveTrip', { trip: S.trip, vehicle: S.vehicle, at: savedAt });
+}
+function closeLive(end?: number) {
+  if (S.kind !== 'sim') finishTrip(S.trip, S.vehicle, end); // simulated drives are never saved to a real car
+  kv.remove('liveTrip');
+  savedAt = 0;
+}
+export function recoverTrip() {
+  const saved = kv.get<{ trip: LiveTrip; vehicle: string; at: number } | null>('liveTrip', null);
+  if (!saved || S.status === 'connected') return;
+  finishTrip(saved.trip, saved.vehicle, saved.at);
+  kv.remove('liveTrip');
 }
 
 function tripUpdate(speed: number, t: number) {
   const T = S.trip;
-  if (T.last != null && t - T.last < 5) {
+  if (T.last != null && t - T.last < 15) { // gaps up to 15 s still count (slow adapters); longer ones are dropouts
     const dt = t - T.last;
     T.time += dt;
     T.dist += (speed * dt) / 3600;
@@ -177,6 +238,7 @@ function tripUpdate(speed: number, t: number) {
     if (fakeGps && last) addFix(...fakeGps(speed, T.time - last[0]));
     T.samples.push([T.time, speed, val('05'), val('0F'), fuelRateLh()]);
     T.log.rows.push([Math.round(T.time * 10) / 10, ...T.log.keys.map(k => { const x = val(k); return x == null ? null : Math.round(x * 100) / 100; })]);
+    if (Date.now() - savedAt > 15_000) saveLive();
   }
 }
 

@@ -1,4 +1,5 @@
 // Trips log, ownership papers (insurance, visite technique) and service calendar. Ported from garage.js in the web POC.
+import { useMemo } from 'react';
 import { kv, useStored } from './store';
 
 export const DAY = 86400000;
@@ -14,6 +15,9 @@ export type TripLog = { keys: string[]; rows: (number | null)[][] };
 export type Trip = {
   id: string; start: number; end: number; samples: Sample[]; path: [number, number][];
   split: Split; demo?: boolean; places?: [string, string]; vehicle?: string; car?: CarRef; log?: TripLog;
+  // Cloud trips (lib/sync.ts): `cloudId` is the row id in vindici.trips. Trips imported from the Car Scanner CSV
+  // pipeline (source 'csv') only have a summary, no samples, trace or signal log.
+  cloudId?: string; source?: 'app' | 'csv'; summary?: Partial<TripStats>; ends?: [[number, number] | null, [number, number] | null];
 };
 export type MinMax = { min: number; max: number; avg: number } | null;
 export type TripStats = ReturnType<typeof tripStats>;
@@ -73,10 +77,10 @@ export const useFuelPrice = (id: string) => useStored<number>('fuelPrice.' + id,
 
 // Saves the trip with the car's identity (id, name, plate, VIN…) copied onto the record. Kept to the last 60 trips:
 // every signal is logged once a second, and the browser's storage is small.
-export function finishTrip(T: LiveTrip, vehicle = activeId()) {
+export function finishTrip(T: LiveTrip, vehicle = activeId(), end = Date.now()) {
   if (T.samples.length > 5 && T.dist > 0.05) {
     const trips = kv.get<Trip[]>('trips', []), v = vehicleById(vehicle);
-    kv.set('trips', [{ id: Date.now().toString(36), start: T.startedAt!, end: Date.now(), samples: T.samples, path: T.path, split: randomSplit(), vehicle,
+    kv.set('trips', [{ id: Date.now().toString(36), start: T.startedAt!, end, samples: T.samples, path: T.path, split: randomSplit(), vehicle,
       car: v ? carRef(v) : undefined, log: T.log }, ...trips].slice(0, 60));
     bumpOdometer(T.dist, vehicle);
   }
@@ -158,6 +162,17 @@ function demoRoute(a: [number, number, string], b: [number, number, string], dis
 }
 
 export type TripWithStats = Trip & { stats: TripStats };
+
+// Trips recorded on this phone plus the ones downloaded from the account (other phones, Car Scanner history).
+// A trip that is both local and in the cloud is shown once, from the local copy.
+export function useTrips(): Trip[] {
+  const local = useStored<Trip[]>('trips', []), cloud = useStored<Trip[]>('cloudTrips', []);
+  return useMemo(() => {
+    if (!cloud.length) return local;
+    const ids = new Set(local.map(tr => tr.id));
+    return local.concat(cloud.filter(tr => !ids.has(tr.id)));
+  }, [local, cloud]);
+}
 let demoCache: TripWithStats[] | null = null;
 const demoTrips = () => (demoCache ??= [
   demoTrip('e60', 11, 0, 13, 'maarif', 'ainDiab', 12.6), demoTrip('e60', 12, 0, 8, 'sidiMaarouf', 'maarif', 10.2),
@@ -169,8 +184,9 @@ const demoTrips = () => (demoCache ??= [
 const statsCache = new WeakMap<Trip, TripWithStats>();
 // All trips, or only one vehicle's. Trips saved before vehicles existed count as the first vehicle's.
 // The sample trips are left out once the user turns off demo data in Settings.
+const statsOf = (tr: Trip): TripStats => (tr.summary && !tr.samples.length ? { ...tripStats([]), ...tr.summary } : tripStats(tr.samples));
 export const withStats = (trips: Trip[], vehicle?: string, demo = kv.get<{ demo?: boolean }>('settings', {}).demo !== false) =>
-  trips.map(tr => statsCache.get(tr) ?? (statsCache.set(tr, { ...tr, stats: tripStats(tr.samples) }), statsCache.get(tr)!)).concat(demo ? demoTrips() : [])
+  trips.map(tr => statsCache.get(tr) ?? (statsCache.set(tr, { ...tr, stats: statsOf(tr) }), statsCache.get(tr)!)).concat(demo ? demoTrips() : [])
     .filter(tr => !vehicle || (tr.vehicle ?? VEHICLES_DEFAULT[0].id) === vehicle)
     .sort((a, b) => b.start - a.start);
 

@@ -1,6 +1,6 @@
 // One trip: the route on the map, how long and how far, the car that drove it, then the signal plotter.
 // The detailed numbers (road type, fuel, braking, temperatures) are folded under "More details".
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -11,28 +11,33 @@ import { Screen } from '../../components/Screen';
 import { Sheet } from '../../components/Sheet';
 import { SignalChart, type Series } from '../../components/SignalChart';
 import { TripMap } from '../../components/TripMap';
-import { Button, Card, DemoTag, Empty, Grid, PressableScale, Segmented, SectionTitle, StatTile, SWATCHES, T } from '../../components/ui';
-import { tripKeys, tripSeries, useFuelPrice, withStats, type Trip, type TripWithStats } from '../../lib/garage';
+import { Button, Card, CloudTag, DemoTag, Empty, Grid, PressableScale, Segmented, SectionTitle, StatTile, SWATCHES, T } from '../../components/ui';
+import { tripKeys, tripSeries, useFuelPrice, useTrips, withStats, type Trip, type TripWithStats } from '../../lib/garage';
 import { meta } from '../../lib/live';
 import { fmtDate, fmtTime, hm, num, t, useLang } from '../../lib/i18n';
 import { useSettings } from '../../lib/settings';
 import { kv, useStored } from '../../lib/store';
 import { C } from '../../lib/theme';
+import { loadTripDetail } from '../../lib/sync';
 
 export default function TripDetail() {
   useLang();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const stored = useStored<Trip[]>('trips', []);
+  const stored = useTrips();
   const tr = useMemo(() => withStats(stored, undefined, true).find(x => x.id === id), [stored, id]);
   const back = () => (router.canGoBack() ? router.back() : router.replace('/trips'));
+  const [kpis, setKpis] = useState<Record<string, unknown> | null>(null);
+  const cloudId = tr?.cloudId;
+  useEffect(() => { if (tr?.cloudId) loadTripDetail(tr).then(setKpis).catch(() => {}); }, [cloudId]); // the trace or the KPIs, from the account
   if (!tr) return <Screen title="Trips" header={<BackHeader title="Trips" onBack={back} />}><Empty text="No data" /></Screen>;
   const s = tr.stats;
   const short = new Date(tr.start).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 
   return (
-    <Screen title="Trips" header={<BackHeader title={`${short}, ${fmtTime(tr.start)}`} onBack={back} right={tr.demo ? <DemoTag /> : undefined} />}>
+    <Screen title="Trips" header={<BackHeader title={`${short}, ${fmtTime(tr.start)}`} onBack={back} right={tr.demo ? <DemoTag /> : tr.cloudId ? <CloudTag csv={tr.source === 'csv'} /> : undefined} />}>
       <Animated.View entering={FadeIn.duration(500)}>
-        {tr.path?.length > 1 ? <TripMap path={tr.path} height={240} /> : <Card><T className="text-muted">No GPS position was recorded for this trip.</T></Card>}
+        {tr.path?.length > 1 ? <TripMap path={tr.path} height={240} />
+          : <Card><T className="text-muted">{tr.ends?.[0] ? 'Only the start and end positions were recorded for this trip.' : 'No GPS position was recorded for this trip.'}</T></Card>}
       </Animated.View>
 
       <View className="mt-3 flex-row gap-2.5">
@@ -42,17 +47,19 @@ export default function TripDetail() {
       </View>
 
       <Card className="mt-2.5">
-        <Stop color={C.ok} time={fmtTime(tr.start)} place={tr.places?.[0] ?? t('Start')} />
+        <Stop color={C.ok} time={fmtTime(tr.start)} place={tr.places?.[0] || coords(tr.ends?.[0]) || t('Start')} />
         <View className="ml-[5px] h-5 w-0.5 bg-line" />
-        <Stop color={C.bad} time={fmtTime(tr.end)} place={tr.places?.[1] ?? t('End')} />
+        <Stop color={C.bad} time={fmtTime(tr.end)} place={tr.places?.[1] || coords(tr.ends?.[1]) || t('End')} />
       </Card>
 
       <CarCard tr={tr} />
 
       <SectionTitle>Signals</SectionTitle>
-      <Plotter tr={tr} />
+      {tripKeys(tr).length ? <Plotter tr={tr} />
+        : <Card><T className="text-sm text-muted">{tr.source === 'csv' ? 'This trip comes from your Car Scanner CSV history: only its summary is stored, so there are no signals to plot.' : 'Loading the signals from your account…'}</T></Card>}
 
       <Details tr={tr} />
+      {kpis ? <Kpis m={kpis} /> : null}
     </Screen>
   );
 }
@@ -69,6 +76,7 @@ function Key({ label, value, unit, icon }: { label: string; value: string; unit?
     </Card>
   );
 }
+const coords = (p?: [number, number] | null) => (p ? `${p[0].toFixed(4)}, ${p[1].toFixed(4)}` : '');
 const Stop = ({ color, time, place }: { color: string; time: string; place: string }) => (
   <View className="flex-row items-center">
     <View style={{ backgroundColor: color }} className="h-3 w-3 rounded-full" />
@@ -179,6 +187,7 @@ function Details({ tr }: { tr: TripWithStats }) {
   const price = useFuelPrice(tr.vehicle ?? '');
   const { currency } = useSettings();
   const s = tr.stats, sp = tr.split, kmOf = (p: number) => num((s.dist * p) / 100, 1);
+  const csv = tr.source === 'csv', noFuel = csv && !s.fuel; // the CSV processor could not always compute fuel or stops
   return (
     <>
       <PressableScale onPress={() => setOpen(!open)} className="mt-6 flex-row items-center justify-between rounded-2xl border border-line bg-panel px-4 py-3.5">
@@ -195,15 +204,16 @@ function Details({ tr }: { tr: TripWithStats }) {
                 <View key={k}><Text className="text-lg font-bold text-text">{kmOf(sp[k])} km</Text><T className="text-xs text-muted">{k[0].toUpperCase() + k.slice(1)}</T></View>
               ))}
             </View>
-            <T className="mt-3 text-xs text-muted">Placeholder numbers. The speed-profile classifier will compute these in the backend.</T>
+            <T className="mt-3 text-xs text-muted">{tr.source === 'csv' ? 'Computed by your trip processor.' : 'Placeholder numbers. The speed-profile classifier will compute these in the backend.'}</T>
           </Card>
           <SectionTitle>Fuel and time</SectionTitle>
           <Grid>
-            <StatTile label="Fuel used" value={num(s.fuel, 2)} unit="L" />
+            <StatTile label="Fuel used" value={noFuel ? '—' : num(s.fuel, 2)} unit="L" />
             <StatTile label="Consumption" value={s.consumption == null ? '—' : num(s.consumption, 1)} unit="L/100km" />
-            <StatTile label="Cost" value={num(s.fuel * price, 0)} unit={currency} />
-            <StatTile label="Standing time" value={hm(s.standing)} />
+            <StatTile label="Cost" value={noFuel ? '—' : num(s.fuel * price, 0)} unit={currency} />
+            <StatTile label="Standing time" value={csv && !s.standing ? '—' : hm(s.standing)} />
           </Grid>
+          {tr.source === 'csv' ? null : <>
           <SectionTitle>Driving style</SectionTitle>
           <Grid>
             <StatTile label="Hard accelerations" value={String(s.hardAcc)} unit="times" color={s.hardAcc ? C.warn : undefined} />
@@ -212,6 +222,7 @@ function Details({ tr }: { tr: TripWithStats }) {
             <StatTile label="Max deceleration" value={num(s.maxDec, 1)} unit="m/s²" />
           </Grid>
           <T className="mt-2 px-1 text-xs text-muted">Hard acceleration means more than 2 m/s², hard braking more than 2.5 m/s².</T>
+          </>}
           {s.coolant ? (
             <>
               <SectionTitle>Engine temperature</SectionTitle>
@@ -224,6 +235,28 @@ function Details({ tr }: { tr: TripWithStats }) {
           <T className="mt-3 px-1 text-[11px] text-muted">{fmtDate(tr.start)}</T>
         </>
       ) : null}
+    </>
+  );
+}
+
+// The Car Scanner trips' KPIs, as computed by the CSV trip processor (the trips_metrics row).
+const KPI: [string, string, string, number][] = [
+  ['fuel_efficiency_l_per_100km', 'Consumption', 'L/100km', 1], ['fuel_cost_total', 'Fuel cost', '', 0],
+  ['avg_engine_rpm', 'Average RPM', 'rpm', 0], ['max_engine_rpm', 'Max RPM', 'rpm', 0],
+  ['avg_engine_load_percent', 'Average engine load', '%', 0], ['avg_throttle_position_percent', 'Average throttle', '%', 0],
+  ['avg_intake_air_temp_c', 'Intake air average', '°C', 0], ['min_voltage', 'Battery min', 'V', 1], ['max_voltage', 'Battery max', 'V', 1],
+  ['idle_time_percent', 'Idle time', '%', 0], ['avg_short_term_fuel_trim_bank1', 'Short-term fuel trim', '%', 1], ['avg_long_term_fuel_trim_bank1', 'Long-term fuel trim', '%', 1],
+  ['avg_maf_rate_g_per_sec', 'Average MAF', 'g/s', 1], ['max_instant_hp_from_fuel_conso', 'Max power (est.)', 'hp', 0],
+  ['eco_driving_score', 'Eco score', '/100', 0], ['overall_trip_score', 'Trip score', '/100', 0], ['data_points_count', 'Data points', '', 0],
+];
+function Kpis({ m }: { m: Record<string, unknown> }) {
+  const rows = KPI.filter(([k]) => m[k] != null && m[k] !== '' && Number.isFinite(Number(m[k])));
+  if (!rows.length) return null;
+  return (
+    <>
+      <SectionTitle>Car Scanner KPIs</SectionTitle>
+      <Grid>{rows.map(([k, label, unit, dp]) => <StatTile key={k} label={label} value={num(Number(m[k]), dp)} unit={unit} />)}</Grid>
+      <T className="mt-2 px-1 text-[11px] text-muted">{`${t('From your CSV trip processor')} · ${String(m.file_name ?? '')}`}</T>
     </>
   );
 }

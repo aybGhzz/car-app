@@ -1,6 +1,6 @@
 // Trips: a short summary of the last 7 days, then one card per trip with its route, duration and distance.
 // Fuel, costs and the other details are on each trip's page.
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Text, View } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { router } from 'expo-router';
@@ -8,8 +8,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { BarChart } from '../../components/charts';
 import { Screen } from '../../components/Screen';
 import { TripMap } from '../../components/TripMap';
-import { Card, CountUp, DemoTag, Empty, PressableScale, SectionTitle, T } from '../../components/ui';
-import { DAY, useVehicle, withStats, type Trip, type TripWithStats } from '../../lib/garage';
+import { Button, Card, CloudTag, CountUp, DemoTag, Empty, PressableScale, SectionTitle, T } from '../../components/ui';
+import { DAY, useVehicle, useTrips, withStats, type Trip, type TripWithStats } from '../../lib/garage';
 import { VehicleSwitcher } from '../../components/VehicleSwitcher';
 import { fmtDate, fmtTime, hm, locale, num, t, useLang } from '../../lib/i18n';
 import { useSettings } from '../../lib/settings';
@@ -25,7 +25,7 @@ export function TripCard({ tr, index }: { tr: TripWithStats; index: number }) {
         <View className="p-4 pt-3">
           <View className="flex-row items-center justify-between">
             <Text className="font-bold text-text">{fmtDate(tr.start)} · {fmtTime(tr.start)}</Text>
-            <View className="flex-row items-center gap-2">{tr.demo ? <DemoTag /> : null}<Ionicons name="chevron-forward" size={18} color={C.muted} /></View>
+            <View className="flex-row items-center gap-2">{tr.demo ? <DemoTag /> : tr.cloudId ? <CloudTag csv={tr.source === 'csv'} /> : null}<Ionicons name="chevron-forward" size={18} color={C.muted} /></View>
           </View>
           {tr.places ? (
             <View className="mt-1 flex-row items-center">
@@ -47,12 +47,15 @@ const Fig = ({ icon, v }: { icon: any; v: string }) => (
   <View className="flex-row items-center"><Ionicons name={icon} size={16} color={C.accent} /><Text className="ml-1.5 text-lg font-bold text-text">{v}</Text></View>
 );
 
+const PAGE = 25;
+
 export default function Trips() {
   useLang();
-  const stored = useStored<Trip[]>('trips', []);
+  const stored = useTrips();
   const vehicle = useVehicle();
   const { demo } = useSettings();
   const trips = useMemo(() => withStats(stored, vehicle.id, demo), [stored, vehicle.id, demo]);
+  const [shown, setShown] = useState(PAGE); // the Car Scanner history has hundreds of trips: render them in pages
 
   const since = new Date().setHours(0, 0, 0, 0) - 6 * DAY;
   const week = trips.filter(tr => tr.start >= since);
@@ -77,7 +80,8 @@ export default function Trips() {
         </Card>
 
         <SectionTitle>Trips</SectionTitle>
-        {trips.length ? trips.map((tr, i) => <TripCard key={tr.id} tr={tr} index={i} />) : <Empty text="No trips yet. Trips are recorded while the adapter is connected." />}
+        {trips.length ? trips.slice(0, shown).map((tr, i) => <TripCard key={tr.id} tr={tr} index={i} />) : <Empty text="No trips yet. Trips are recorded while the adapter is connected." />}
+        {trips.length > shown ? <Button title={`${t('Show more')} (${trips.length - shown})`} onPress={() => setShown(shown + PAGE)} /> : null}
       </View>
     </Screen>
   );

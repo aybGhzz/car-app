@@ -15,7 +15,7 @@ export class SimTransport {
     this.clearedAt = null;
     this.freeze = { ...this.state(0), rpm: 2450, speed: 72, coolant: 88, load: 64, iat: 31, maf: 28.4, throttle: 34, stft: -6.2, ltft: 3.1, map: 68, timing: 18 };
   }
-  reset() { this.echo = true; this.spaces = true; this.searching = true; }
+  reset() { this.echo = true; this.spaces = true; this.searching = true; this.headers = false; this.cra = null; }
   async open() {}
   async close() {}
   async write(s) {
@@ -102,6 +102,8 @@ export class SimTransport {
       if (c === 'I') return 'ELM327 v1.5';
       if (/^E[01]$/.test(c)) this.echo = c === 'E1';
       if (/^S[01]$/.test(c)) this.spaces = c === 'S1';
+      if (/^H[01]$/.test(c)) this.headers = c === 'H1';
+      if (c.startsWith('CRA')) this.cra = c.slice(3) || null;
       if (c.startsWith('SP')) this.searching = true;
       if (c === 'DPN') return 'A6';
       if (c === 'DP') return 'AUTO, ISO 15765-4 (CAN 11/500)';
@@ -116,7 +118,16 @@ export class SimTransport {
     switch (mode) {
       case '01': {
         const d = this.encode(pid, this.state());
-        return d ? prefix + this.fmt([0x41, n, ...d]) : nodata;
+        if (!d) return nodata;
+        if (!this.headers) return prefix + this.fmt([0x41, n, ...d]);
+        // With headers on, a second module (the gearbox, 7E9) answers the supported-PID requests first with a short
+        // list, like on some real cars. The engine is 7E8.
+        const line = (id, b) => (this.cra && this.cra !== id ? null : id + (this.spaces ? ' ' : '') + this.fmt([b.length, ...b]));
+        const out = [];
+        const base = ['00', '20', '40', '60', '80', 'A0'].indexOf(pid);
+        if (base >= 0 && base <= 2) out.push(line('7E9', [0x41, n, ...this.bitmap([0x0C, 0x0D, 0x42], base * 0x20)]));
+        out.push(line('7E8', [0x41, n, ...d]));
+        return prefix + out.filter(Boolean).join('\r');
       }
       case '02': {
         if (!this.stored.length) return nodata;

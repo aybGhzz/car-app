@@ -9,11 +9,16 @@ import { Screen } from '../components/Screen';
 import { VehicleSwitcher } from '../components/VehicleSwitcher';
 import { Button, Card, PressableScale, Segmented, T, Toggle } from '../components/ui';
 import { odometer, setOdometer, useFuelPrice, useVehicle, vehicleName } from '../lib/garage';
-import { getLang, LANGS, setLang, t, useLang, type Lang } from '../lib/i18n';
+import { fmtDate, fmtTime, getLang, LANGS, setLang, t, useLang, type Lang } from '../lib/i18n';
 import { setSetting, setVehicleSetting, useSettings, useVehicleSettings, type ThemeId } from '../lib/settings';
-import { kv } from '../lib/store';
+import { kv, useStored } from '../lib/store';
 import { initials, useUser } from '../lib/auth';
+import { cloudEnabled } from '../lib/supabase';
+import { syncNow, useSyncState } from '../lib/sync';
+import { DotsLoader } from '../components/Loaders';
 import { C } from '../lib/theme';
+import Constants from 'expo-constants';
+import { useLive } from '../lib/live';
 
 function Group({ title, scope, icon, children }: { title: string; scope: 'car' | 'app'; icon: any; children: ReactNode }) {
   return (
@@ -87,6 +92,14 @@ export default function Settings() {
         </Card>
       </Group>
 
+      <Group title="Trips" scope="app" icon="map">
+        <Card className="py-1">
+          <Row label="End the trip automatically" sub="After this long with the engine off, even if the adapter stays connected. 0 = never." last>
+            <Num value={cfg.autoEndMin} unit="min" onChange={v => setSetting('autoEndMin', Math.max(0, Math.round(v)))} />
+          </Row>
+        </Card>
+      </Group>
+
       <Group title="Notifications" scope="app" icon="notifications">
         <Card className="py-1">
           <Row label="Notifications" sub="Every alert rule"><Toggle value={cfg.notifications} onChange={v => setSetting('notifications', v)} /></Row>
@@ -128,6 +141,10 @@ export default function Settings() {
         </View>
       </Group>
 
+      <Group title="Cloud sync" scope="app" icon="cloud">
+        <CloudSync />
+      </Group>
+
       <Group title="Data" scope="app" icon="server">
         <Card className="py-1">
           <Row label="Show demo trips" sub="Sample trips so the screens are not empty"><Toggle value={cfg.demo} onChange={v => setSetting('demo', v)} /></Row>
@@ -137,7 +154,67 @@ export default function Settings() {
         </Card>
       </Group>
 
-      <T className="mt-6 text-center text-xs text-muted">Vindici · version 1.0 · proof of concept</T>
+      <Group title="About" scope="app" icon="information-circle">
+        <About />
+      </Group>
+
+      <T className="mt-6 text-center text-xs text-muted">Vindici · proof of concept</T>
     </Screen>
+  );
+}
+
+// Account sync: who is signed in, when the last sync ran, and a manual "Sync now".
+function CloudSync() {
+  const user = useUser(), st = useSyncState();
+  const trips = useStored<unknown[]>('cloudTrips', []);
+  if (!cloudEnabled) return <Card><T className="text-sm text-muted">Cloud sync is not set up in this build of the app.</T></Card>;
+  if (!user?.cloud) {
+    return (
+      <Card>
+        <T className="mb-3 text-sm text-muted">Sign in to save your cars, papers, services and trips to your account and find them on any phone.</T>
+        <Button kind="primary" title="Sign in or create an account" onPress={() => router.push('/login')} />
+      </Card>
+    );
+  }
+  return (
+    <Card className="py-1">
+      <Row label="Account" sub={user.email}><Ionicons name="cloud-done-outline" size={20} color={C.ok} /></Row>
+      <Row label="Last sync" sub={st.error ? `${t('Error')}: ${st.error}` : st.at ? `${fmtDate(st.at)}, ${fmtTime(st.at)}` : t('Not synced yet')}>
+        {st.busy ? <DotsLoader /> : <Ionicons name={st.error ? 'alert-circle' : 'checkmark-circle'} size={20} color={st.error ? C.bad : C.ok} />}
+      </Row>
+      <Row label="Trips in the account" sub="Includes the Car Scanner history">
+        <Text className="font-bold text-text">{trips.length}</Text>
+      </Row>
+      <Row label="Sync now" sub="Changes are also sent automatically a few seconds after you make them" last>
+        <Button title="Sync" onPress={() => syncNow()} />
+      </Row>
+    </Card>
+  );
+}
+
+// App version, the build it came from, the adapter in use, links and credits.
+function About() {
+  useLang();
+  const S = useLive();
+  const cfg = Constants.expoConfig, extra = (cfg?.extra ?? {}) as { commit?: string | null; builtAt?: string };
+  const commit = typeof extra.commit === 'string' && extra.commit ? extra.commit : null;
+  const built = typeof extra.builtAt === 'string' ? Date.parse(extra.builtAt) : null;
+  const val = (v: string) => <Text className="max-w-[60%] text-right font-semibold text-text" numberOfLines={2}>{v}</Text>;
+  const elm = S.status === 'connected' ? (S as any).elm : null;
+  return (
+    <>
+      <Card className="py-1">
+        <Row label="Version">{val(cfg?.version ?? '—')}</Row>
+        <Row label="Build" sub={built ? fmtDate(built) + ' · ' + fmtTime(built) : undefined}>{val(commit ?? (Platform.OS === 'web' ? 'Web' : t('Local build')))}</Row>
+        <Row label="Platform">{val(Platform.OS === 'web' ? 'Web' : `${Platform.OS === 'ios' ? 'iOS' : 'Android'} ${Platform.Version}`)}</Row>
+        <Row label="Package">{val(cfg?.android?.package ?? cfg?.ios?.bundleIdentifier ?? '—')}</Row>
+        <Row label="Adapter" sub={elm ? S.message : undefined} last>{val(elm ? (elm.version || 'ELM327') : t('Not connected'))}</Row>
+      </Card>
+      <Card className="mt-2.5 py-1">
+        <Row label="Web version" last>{val('—')}</Row>
+      </Card>
+      <T className="mt-2.5 px-1 text-xs text-muted">Privacy: your cars, trips and papers stay on this phone, and in your own account when you sign in. Nothing is shared with anyone else.</T>
+      <T className="mt-1.5 px-1 text-xs text-muted">Maps © OpenStreetMap contributors, tiles © CARTO. Trouble code texts are searched on the web, not stored in the app.</T>
+    </>
   );
 }

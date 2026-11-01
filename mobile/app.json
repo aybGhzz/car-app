@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Vindici",
-    "slug": "obd-scanner-app",
+    "slug": "vindici",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -46,13 +46,43 @@
           "modes": [],
           "bluetoothAlwaysPermission": "Connects to your ELM327 OBD-II adapter."
         }
-      ]
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "extraProguardRules": "-keep class androidx.work.** { *; }\n-keep class androidx.room.** { *; }\n-keep class * extends androidx.room.RoomDatabase { *; }\n-keep class **_Impl { *; }\n-keep class org.maplibre.** { *; }"
+          }
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Records the route of your trips.",
+          "locationAlwaysAndWhenInUsePermission": "Keeps recording your trip while you use other apps.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      "@react-native-google-signin/google-signin",
+      "@maplibre/maplibre-react-native"
     ],
     "scheme": "obdscanner",
     "backgroundColor": "#0b0e13",
     "experiments": {
       "typedRoutes": false,
       "baseUrl": "/car-app"
-    }
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "ad8a71d9-0403-43d9-9190-3a448e14ee46"
+      }
+    },
+    "owner": "vindici_101"
   }
 }

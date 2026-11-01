@@ -7,6 +7,7 @@ const PREFIX = 'obd.';
 const mem: Record<string, unknown> = {};
 const defaults: Record<string, unknown> = {}; // stable default objects, so useSyncExternalStore sees no change
 const listeners = new Map<string, Set<() => void>>();
+const anyListeners = new Set<(k: string) => void>(); // e.g. cloud sync, which watches many keys
 
 export const kv = {
   async hydrate() {
@@ -22,12 +23,19 @@ export const kv = {
     mem[k] = v;
     AsyncStorage.setItem(PREFIX + k, JSON.stringify(v)).catch(() => {});
     listeners.get(k)?.forEach(f => f());
+    anyListeners.forEach(f => f(k));
   },
   remove(k: string) {
     delete mem[k];
     AsyncStorage.removeItem(PREFIX + k).catch(() => {});
     listeners.get(k)?.forEach(f => f());
+    anyListeners.forEach(f => f(k));
   },
+  onAnyChange(f: (k: string) => void) {
+    anyListeners.add(f);
+    return () => { anyListeners.delete(f); };
+  },
+  has: (k: string) => k in mem,
   subscribe(k: string, f: () => void) {
     if (!listeners.has(k)) listeners.set(k, new Set());
     listeners.get(k)!.add(f);

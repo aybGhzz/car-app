@@ -49,7 +49,10 @@ export class ELM327 {
     this.protocolNumber = pn;
     this.isCAN = pn >= 6 && pn <= 9;
     this.defaultHeader = pn === 7 || pn === 9 ? '18DB33F1' : '7DF';
-    this.protocolName = await this.text('ATDP');
+    // Some clones answer ATDP with just "AUTO,": name the protocol from its number instead.
+    const NAMES = { 1: 'SAE J1850 PWM', 2: 'SAE J1850 VPW', 3: 'ISO 9141-2', 4: 'ISO 14230-4 KWP (5 baud init)', 5: 'ISO 14230-4 KWP (fast init)',
+      6: 'ISO 15765-4 CAN (11 bit, 500 kbaud)', 7: 'ISO 15765-4 CAN (29 bit, 500 kbaud)', 8: 'ISO 15765-4 CAN (11 bit, 250 kbaud)', 9: 'ISO 15765-4 CAN (29 bit, 250 kbaud)' };
+    this.protocolName = NAMES[pn] ?? (await this.text('ATDP')).replace(/^AUTO,\s*/i, '');
   }
 
   static textLines(raw) {
