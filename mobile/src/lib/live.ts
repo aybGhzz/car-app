@@ -7,6 +7,7 @@ import { SimTransport } from './obd/simulator';
 import { BleTransport, ClassicTransport } from './transports/bluetooth';
 import type { ConnKind, Transport } from './transports/types';
 import { activeId, finishTrip, newTrip, odometer, setOdometer, vehicleById, type LiveTrip } from './garage';
+import { kv } from './store';
 import { checkSignal, resetSignals } from './alerts';
 import { metres, simGps, startGps, stopGps } from './gps';
 import { vehicleSettings, settings } from './settings';
@@ -125,7 +126,7 @@ export async function disconnect() {
   setStatus('idle', 'Disconnected');
   stopGps();
   fakeGps = null;
-  finishTrip(S.trip, S.vehicle);
+  closeLive();
   S.trip = newTrip();
   try { await elm?.t.close(); } catch {}
 }
@@ -162,7 +163,7 @@ async function pollLoop() {
 function autoEnd() {
   const min = settings().autoEndMin;
   if (!min || !S.trip.samples.length || Date.now() - S.lastActive < min * 60_000) return;
-  finishTrip(S.trip, S.vehicle);
+  closeLive();
   S.trip = newTrip(LOG_KEYS.filter(k => isSupported(k)));
   S.dead.clear(); // signals that stopped answering with the engine off get another chance
   S.stats = {};
@@ -192,6 +193,26 @@ export function fuelRateLh() {
   return maf != null ? (maf * 3600) / (14.7 * 740) : null; // gasoline: stoichiometric AFR 14.7, 740 g/L
 }
 
+// The trip in progress is copied to the phone's storage every 15 s, so it survives the app being killed mid-drive.
+// It is saved as a normal trip (and uploaded) when it ends: Disconnect, engine off for the set time, or at the next
+// start if the app was killed.
+let savedAt = 0;
+function saveLive() {
+  savedAt = Date.now();
+  kv.set('liveTrip', { trip: S.trip, vehicle: S.vehicle, at: savedAt });
+}
+function closeLive(end?: number) {
+  finishTrip(S.trip, S.vehicle, end);
+  kv.remove('liveTrip');
+  savedAt = 0;
+}
+export function recoverTrip() {
+  const saved = kv.get<{ trip: LiveTrip; vehicle: string; at: number } | null>('liveTrip', null);
+  if (!saved || S.status === 'connected') return;
+  finishTrip(saved.trip, saved.vehicle, saved.at);
+  kv.remove('liveTrip');
+}
+
 function tripUpdate(speed: number, t: number) {
   const T = S.trip;
   if (T.last != null && t - T.last < 15) { // gaps up to 15 s still count (slow adapters); longer ones are dropouts
@@ -210,6 +231,7 @@ function tripUpdate(speed: number, t: number) {
     if (fakeGps && last) addFix(...fakeGps(speed, T.time - last[0]));
     T.samples.push([T.time, speed, val('05'), val('0F'), fuelRateLh()]);
     T.log.rows.push([Math.round(T.time * 10) / 10, ...T.log.keys.map(k => { const x = val(k); return x == null ? null : Math.round(x * 100) / 100; })]);
+    if (Date.now() - savedAt > 15_000) saveLive();
   }
 }
 

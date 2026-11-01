@@ -8,6 +8,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Toast } from '../components/Toast';
 import { SkeletonScreen } from '../components/Loaders';
 import { watchDocs } from '../lib/alerts';
+import { recoverTrip } from '../lib/live';
 import { watchAuth } from '../lib/auth';
 import { startSync } from '../lib/sync';
 import { kv } from '../lib/store';
@@ -24,6 +25,7 @@ export default function RootLayout() {
   const { theme } = useSettings();
   useEffect(() => { kv.hydrate().then(() => { restoreLang(); setReady(true); }); }, []);
   useEffect(() => (ready ? watchDocs() : undefined), [ready]);
+  useEffect(() => { if (ready) recoverTrip(); }, [ready]); // a trip cut short by the app being killed
   useEffect(() => {
     if (!ready) return;
     const offAuth = watchAuth(), offSync = startSync();

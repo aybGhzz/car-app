@@ -77,10 +77,10 @@ export const useFuelPrice = (id: string) => useStored<number>('fuelPrice.' + id,
 
 // Saves the trip with the car's identity (id, name, plate, VIN…) copied onto the record. Kept to the last 60 trips:
 // every signal is logged once a second, and the browser's storage is small.
-export function finishTrip(T: LiveTrip, vehicle = activeId()) {
+export function finishTrip(T: LiveTrip, vehicle = activeId(), end = Date.now()) {
   if (T.samples.length > 5 && T.dist > 0.05) {
     const trips = kv.get<Trip[]>('trips', []), v = vehicleById(vehicle);
-    kv.set('trips', [{ id: Date.now().toString(36), start: T.startedAt!, end: Date.now(), samples: T.samples, path: T.path, split: randomSplit(), vehicle,
+    kv.set('trips', [{ id: Date.now().toString(36), start: T.startedAt!, end, samples: T.samples, path: T.path, split: randomSplit(), vehicle,
       car: v ? carRef(v) : undefined, log: T.log }, ...trips].slice(0, 60));
     bumpOdometer(T.dist, vehicle);
   }
