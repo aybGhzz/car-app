@@ -19,6 +19,8 @@ import { DotsLoader } from '../components/Loaders';
 import { C } from '../lib/theme';
 import Constants from 'expo-constants';
 import { useLive } from '../lib/live';
+import { BackgroundCheck } from '../components/BackgroundCheck';
+import { forgetAdapter, useSavedAdapter } from '../lib/adapters';
 
 function Group({ title, scope, icon, children }: { title: string; scope: 'car' | 'app'; icon: any; children: ReactNode }) {
   return (
@@ -69,6 +71,7 @@ export default function Settings() {
   const vs = useVehicleSettings(car.id, car.fuel);
   const price = useFuelPrice(car.id);
   const user = useUser();
+  const adapter = useSavedAdapter(car.id);
   const back = () => (router.canGoBack() ? router.back() : router.replace('/'));
 
   return (
@@ -87,6 +90,9 @@ export default function Settings() {
           <Row label="Shift lights start at"><Num value={vs.shiftFrom} unit="rpm" onChange={v => setVehicleSetting(car.id, 'shiftFrom', v)} /></Row>
           <Row label="Shift lights flash at"><Num value={vs.shiftTo} unit="rpm" onChange={v => setVehicleSetting(car.id, 'shiftTo', v)} /></Row>
           <Row label="Record the route" sub="GPS position during trips"><Toggle value={vs.gps} onChange={v => setVehicleSetting(car.id, 'gps', v)} /></Row>
+          <Row label="OBD adapter" sub={adapter ? `${adapter.name} · ${adapter.id}` : t('Saved the first time you connect this car')}>
+            {adapter ? <PressableScale onPress={() => forgetAdapter(car.id)} className="rounded-full border border-line px-3 py-1.5"><T className="text-xs font-bold text-muted">Forget</T></PressableScale> : <Text className="text-muted">—</Text>}
+          </Row>
           <Link label="Car details" sub="Make, model, engine, plate, VIN" onPress={() => router.push(`/car-edit/${car.id}`)} />
           <Link label="Papers" sub="Insurance and visite technique" onPress={() => router.push('/papers')} last />
         </Card>
@@ -94,10 +100,12 @@ export default function Settings() {
 
       <Group title="Trips" scope="app" icon="map">
         <Card className="py-1">
+          <Row label="Connect automatically" sub="To the car's last adapter, when the app opens and after signing in"><Toggle value={cfg.autoConnect} onChange={v => setSetting('autoConnect', v)} /></Row>
           <Row label="End the trip automatically" sub="After this long with the engine off, even if the adapter stays connected. 0 = never." last>
             <Num value={cfg.autoEndMin} unit="min" onChange={v => setSetting('autoEndMin', Math.max(0, Math.round(v)))} />
           </Row>
         </Card>
+        <BackgroundCheck />
       </Group>
 
       <Group title="Notifications" scope="app" icon="notifications">

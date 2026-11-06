@@ -1,7 +1,7 @@
 // Screen title with the notifications bell, settings, and the connection chip (tap to connect).
 // The language moved to Settings: it is chosen once, so it does not need space on every screen.
-import { useState } from 'react';
-import { router } from 'expo-router';
+import { useRef, useState } from 'react';
+import { router, useIsFocused } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useUnread } from '../lib/alerts';
 import { Text, View } from 'react-native';
@@ -35,8 +35,14 @@ export function Header({ title, subtitle }: { title: string; subtitle?: string }
   const insets = useSafeAreaInsets();
   const [connOpen, setConnOpen] = useState(false);
   const unread = useUnread();
-  const color = S.status === 'connected' ? C.ok : S.status === 'error' ? C.bad : S.status === 'connecting' ? C.warn : C.muted;
-  const label = S.status === 'connected' ? (S.kind === 'sim' ? 'Simulator' : 'Connected') : S.status === 'connecting' ? 'Connecting…' : S.status === 'error' ? 'Error' : 'Connect';
+  const focused = useIsFocused();
+  // the remembered adapter did not answer: open the picker, on the screen being shown only (tab screens stay mounted)
+  const prompt = useRef(S.prompt);
+  useEffect(() => {
+    if (S.prompt !== prompt.current) { prompt.current = S.prompt; if (focused) setConnOpen(true); }
+  }, [S.prompt]);
+  const color = S.status === 'connected' ? C.ok : S.status === 'error' ? C.bad : S.status === 'connecting' || S.status === 'reconnecting' ? C.warn : C.muted;
+  const label = S.status === 'connected' ? (S.kind === 'sim' ? 'Simulator' : 'Connected') : S.status === 'connecting' ? 'Connecting…' : S.status === 'reconnecting' ? 'Reconnecting…' : S.status === 'error' ? 'Error' : 'Connect';
 
   return (
     <View style={{ paddingTop: insets.top + 8 }} className="flex-row items-center justify-between px-4 pb-3">
@@ -47,7 +53,7 @@ export function Header({ title, subtitle }: { title: string; subtitle?: string }
       <IconBtn icon="notifications-outline" label="Notifications" badge={unread} onPress={() => router.push('/notifications')} />
       <IconBtn icon="settings-outline" label="Settings" onPress={() => router.push('/settings')} />
       <PressableScale onPress={() => setConnOpen(true)} className="h-10 flex-row items-center rounded-full border border-line bg-panel px-3.5">
-        {S.status === 'connecting' ? <View style={{ marginRight: 8 }}><RingLoader size={14} stroke={2} /></View> : <PulseDot color={color} pulse={S.status === 'connected'} />}
+        {S.status === 'connecting' || S.status === 'reconnecting' ? <View style={{ marginRight: 8 }}><RingLoader size={14} stroke={2} /></View> : <PulseDot color={color} pulse={S.status === 'connected'} />}
         <Text className="text-sm font-semibold text-text">{t(label)}</Text>
       </PressableScale>
       {S.status === 'connecting' ? <View pointerEvents="none" style={{ position: 'absolute', left: 16, right: 16, bottom: 2, alignItems: 'center' }}><LineLoader width={220} /></View> : null}

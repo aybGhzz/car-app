@@ -74,7 +74,7 @@ export default function Dashboard() {
   useWantedPids(['0C', '0D', ...gauges]);
 
   const setGauges = (g: string[]) => kv.set('gauges', g);
-  const connected = S.status === 'connected';
+  const connected = S.status === 'connected' || S.status === 'reconnecting'; // keep the screen while the adapter comes back
   const speed = val('0D'), rpm = val('0C');
   const T_ = S.trip, rate = fuelRateLh();
   const inst = rate != null && speed != null ? (speed > 3 ? (rate / speed) * 100 : rate) : null;

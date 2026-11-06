@@ -32,7 +32,7 @@ export default function Home() {
   const cfg = useSettings();
   const stored = useTrips();
   const trips = useMemo(() => withStats(stored, car.id, cfg.demo), [stored, car.id, cfg.demo]);
-  const connected = S.status === 'connected';
+  const connected = S.status === 'connected' || S.status === 'reconnecting'; // keep the screen while the adapter comes back
   const user = useUser();
 
   // What needs attention for this car, most urgent first.

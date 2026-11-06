@@ -8,8 +8,8 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Toast } from '../components/Toast';
 import { SkeletonScreen } from '../components/Loaders';
 import { watchDocs } from '../lib/alerts';
-import { recoverTrip } from '../lib/live';
-import { watchAuth } from '../lib/auth';
+import { autoConnect, recoverTrip } from '../lib/live';
+import { useUser, watchAuth } from '../lib/auth';
 import { startSync } from '../lib/sync';
 import { kv } from '../lib/store';
 import { restoreLang } from '../lib/i18n';
@@ -26,6 +26,9 @@ export default function RootLayout() {
   useEffect(() => { kv.hydrate().then(() => { restoreLang(); setReady(true); }); }, []);
   useEffect(() => (ready ? watchDocs() : undefined), [ready]);
   useEffect(() => { if (ready) recoverTrip(); }, [ready]); // a trip cut short by the app being killed
+  const user = useUser();
+  // the car's last adapter, at start-up and right after signing in (lib/adapters.ts)
+  useEffect(() => { if (ready && user) setTimeout(autoConnect, 600); }, [ready, user?.id ?? user?.email ?? null]);
   useEffect(() => {
     if (!ready) return;
     const offAuth = watchAuth(), offSync = startSync();
