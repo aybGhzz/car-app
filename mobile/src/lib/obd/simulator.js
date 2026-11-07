@@ -74,6 +74,8 @@ export class SimTransport {
       '0F': () => b(s.iat + 40), '10': () => w(s.maf * 100), '11': () => b(s.throttle * 2.55), '1F': () => w(s.runtime), '21': () => w(s.distMil),
       '2F': () => b(s.fuel * 2.55), '31': () => w(s.distClear), '33': () => b(s.baro), '42': () => w(s.voltage * 1000), '43': () => w(s.load * 2.55),
       '44': () => w(s.lambda * 32768), '45': () => b(s.throttle * 2.55), '46': () => b(s.ambient + 40), '5C': () => b(s.oil + 40), '5E': () => w(s.fuelRate * 20),
+      '03': () => [2, 0], '13': () => [0x33], '1C': () => [6], '51': () => [1],
+      '3C': () => w((420 + s.load * 3 + 40) * 10), '7C': () => [0x01, 0x2C, 0x80], // 7C: no formula in the app, shown raw
       'A6': () => { const v = Math.round(s.odometer * 10); return [...w(Math.floor(v / 65536)), ...w(v % 65536)]; },
     };
     if (pid === '01') {

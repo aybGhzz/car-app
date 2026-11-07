@@ -18,6 +18,7 @@ import { syncNow, useSyncState } from '../lib/sync';
 import { DotsLoader } from '../components/Loaders';
 import { C } from '../lib/theme';
 import Constants from 'expo-constants';
+import * as Application from 'expo-application';
 import { useLive } from '../lib/live';
 import { BackgroundCheck } from '../components/BackgroundCheck';
 import { forgetAdapter, useSavedAdapter } from '../lib/adapters';
@@ -212,7 +213,8 @@ function About() {
   return (
     <>
       <Card className="py-1">
-        <Row label="Version">{val(cfg?.version ?? '—')}</Row>
+        {/* the version name is raised in app.json before each build; EAS adds 1 to the build number on every build */}
+        <Row label="Version">{val(Platform.OS === 'web' ? (cfg?.version ?? '—') : `${Application.nativeApplicationVersion ?? cfg?.version ?? '—'} (${t('build')} ${Application.nativeBuildVersion ?? '—'})`)}</Row>
         <Row label="Build" sub={built ? fmtDate(built) + ' · ' + fmtTime(built) : undefined}>{val(commit ?? (Platform.OS === 'web' ? 'Web' : t('Local build')))}</Row>
         <Row label="Platform">{val(Platform.OS === 'web' ? 'Web' : `${Platform.OS === 'ios' ? 'iOS' : 'Android'} ${Platform.Version}`)}</Row>
         <Row label="Package">{val(cfg?.android?.package ?? cfg?.ios?.bundleIdentifier ?? '—')}</Row>

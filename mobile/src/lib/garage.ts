@@ -29,16 +29,41 @@ export const carRef = (v: Vehicle): CarRef => ({ id: v.id, name: vehicleName(v),
 
 // One signal of a trip as [seconds, value] points. Older trips without a log still have speed, temperatures and fuel rate.
 const SAMPLE_COL: Record<string, number> = { '0D': 1, '05': 2, '0F': 3, '5E': 4 };
+// Signals computed from the samples, for every trip that has speed and fuel rate (measured, or estimated from
+// the MAF on cars without PID 5E, like the E60): fuel rate in L/h, and consumption in L/100km over the last 10 s
+// (instant values swing too much to read). Not shown while standing still: L/100km has no meaning at 0 km/h.
+export const DERIVED_META: Record<string, { name: string; unit: string; min: number; max: number; dp: number }> = {
+  FR: { name: 'Fuel rate', unit: 'L/h', min: 0, max: 40, dp: 1 },
+  L100: { name: 'Fuel consumption', unit: 'L/100km', min: 0, max: 30, dp: 1 },
+};
+const hasFuel = (tr: Trip) => tr.samples.some(s => s[4] != null);
 export function tripKeys(tr: Trip): string[] {
-  return tr.log?.keys.length ? tr.log.keys : Object.keys(SAMPLE_COL).filter(k => tr.samples.some(s => s[SAMPLE_COL[k]] != null));
+  const base = tr.log?.keys.length ? tr.log.keys : Object.keys(SAMPLE_COL).filter(k => tr.samples.some(s => s[SAMPLE_COL[k]] != null));
+  if (!hasFuel(tr)) return base;
+  return [...base, ...(base.includes('5E') ? [] : ['FR']), 'L100'];
 }
 export function tripSeries(tr: Trip, key: string): [number, number][] {
+  if (key === 'FR') return tr.samples.filter(s => s[4] != null).map(s => [s[0], s[4]!]);
+  if (key === 'L100') return consumptionSeries(tr.samples);
   if (tr.log?.keys.length) {
     const i = tr.log.keys.indexOf(key) + 1;
     return i ? tr.log.rows.filter(r => r[i] != null).map(r => [r[0]!, r[i]!]) : [];
   }
   const c = SAMPLE_COL[key];
   return c ? tr.samples.filter(s => s[c] != null).map(s => [s[0], s[c]!]) : [];
+}
+function consumptionSeries(samples: Sample[], win = 10): [number, number][] {
+  const out: [number, number][] = [], q: [number, number, number][] = []; // [t, km, L] per step
+  let km = 0, L = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const [t0, v0, , , r0] = samples[i - 1], [t1, v1, , , r1] = samples[i], dt = t1 - t0;
+    if (dt <= 0 || dt > 10) continue;
+    const d = ((v0 + v1) / 2) * dt / 3600, f = (((r0 ?? r1 ?? 0) + (r1 ?? r0 ?? 0)) / 2) * dt / 3600;
+    q.push([t1, d, f]); km += d; L += f;
+    while (q.length && q[0][0] <= t1 - win) { const [, a, b] = q.shift()!; km -= a; L -= b; }
+    if (v1 > 3 && km > 0.01) out.push([t1, Math.min(50, (L / km) * 100)]);
+  }
+  return out;
 }
 
 export function tripStats(samples: Sample[]) {

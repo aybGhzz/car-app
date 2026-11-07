@@ -14,7 +14,7 @@ import { Button, Card, PressableScale, SectionTitle, StatTile, Swatches, T, Togg
 import { RuleDot, RuleEditor, ruleText } from '../../components/RuleEditor';
 import { newRuleId, ruleColor, useRules, type SignalRule } from '../../lib/alerts';
 import { useVehicle } from '../../lib/garage';
-import { useAppWidth } from '../../lib/layout';
+import { useAppWidth, useLandscape } from '../../lib/layout';
 import { useVehicleSettings } from '../../lib/settings';
 import { availableKeys, connect, fuelRateLh, meta, useLive, useWantedPids, val } from '../../lib/live';
 import { hm, num, t, useLang } from '../../lib/i18n';
@@ -61,7 +61,7 @@ function Offline() {
 export default function Dashboard() {
   useLang();
   const S = useLive();
-  const width = useAppWidth();
+  const width = useAppWidth(), landscape = useLandscape();
   const gauges = useStored<string[]>('gauges', DEFAULT_GAUGES);
   const styles = useStored<Record<string, { color?: string; stats?: boolean }>>('gaugeStyle', {});
   const rules = useRules();
@@ -78,11 +78,18 @@ export default function Dashboard() {
   const speed = val('0D'), rpm = val('0C');
   const T_ = S.trip, rate = fuelRateLh();
   const inst = rate != null && speed != null ? (speed > 3 ? (rate / speed) * 100 : rate) : null;
-  const big = Math.min(width - 64, 300), small = Math.floor((width - 32 - 12) / 2 - 26); // 2 per row: card padding + border
+  // Upright: the speed dial, then 2 gauges per row. Sideways (car mount): the speed dial on the left, the gauges
+  // on the right in as many ~165 px columns as fit.
+  const side = landscape ? Math.min(280, Math.round((width - 32) * 0.34)) : 0;
+  const gw = landscape ? width - 32 - side - 12 : width - 32; // width left for the gauges
+  const cols = landscape ? Math.max(2, Math.min(5, Math.floor((gw + 12) / 165))) : 2;
+  const big = landscape ? Math.min(side - 40, 220) : Math.min(width - 64, 300), small = Math.floor((gw - 12 * (cols - 1)) / cols - 26); // card padding + border
 
   return (
-    <Screen title="Dashboard" subtitle={connected ? S.message : undefined}>
-      <VehicleSwitcher />
+    <Screen title="Dashboard" subtitle={connected ? S.message : undefined} wide>
+      {landscape && connected ? null : <VehicleSwitcher />}{/* sideways the screen is short: the live car is already chosen */}
+      <View style={landscape ? { flexDirection: 'row', alignItems: 'flex-start', gap: 12 } : undefined}>
+      <View style={landscape ? { width: side, marginTop: 24 } : undefined}>
       {!connected ? <Offline /> : (
         <Animated.View entering={FadeIn.duration(500)}>
           <Card className="items-center pb-5 pt-4">
@@ -96,6 +103,8 @@ export default function Dashboard() {
         </Animated.View>
       )}
 
+      </View>
+      <View style={landscape ? { flex: 1 } : undefined}>
       <SectionTitle right={<PressableScale onPress={() => router.push('/sensors')}><T className="font-semibold text-accent">All sensors →</T></PressableScale>}>
         Gauges
       </SectionTitle>
@@ -122,6 +131,8 @@ export default function Dashboard() {
         <Button title="+ Add gauge" className="flex-1" onPress={() => setGauges([...gauges, availableKeys().find(k => !gauges.includes(k)) ?? '0C'])} />
       </View>
       <T className="mt-2 px-1 text-xs text-muted">Tap a gauge to change its sensor, colour and alerts.</T>
+      </View>
+      </View>
 
       {connected && T_.time > 0 ? (
         <>
@@ -192,9 +203,9 @@ export default function Dashboard() {
 
 function Mini({ label, value, unit }: { label: string; value: string; unit: string }) {
   return (
-    <View className="items-center">
+    <View className="flex-1 items-center px-1">
       <Text style={{ fontVariant: ['tabular-nums'] }} className="text-2xl font-extrabold text-text">{value}</Text>
-      <Text className="text-[11px] text-muted">{t(unit)} · {t(label)}</Text>
+      <Text className="text-center text-[11px] text-muted" numberOfLines={2}>{t(unit)} · {t(label)}</Text>
     </View>
   );
 }

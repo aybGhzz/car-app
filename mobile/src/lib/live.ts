@@ -3,11 +3,11 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { PermissionsAndroid, Platform } from 'react-native';
 import { ELM327 } from './obd/elm327';
-import { OBD, PIDS, PID_KEYS } from './obd/obd';
+import { OBD, PIDS, PID_KEYS, hex2, isBitmapPid } from './obd/obd';
 import { SimTransport } from './obd/simulator';
 import { BleTransport, ClassicTransport, classicReady, scanBle } from './transports/bluetooth';
 import type { ConnKind, Transport } from './transports/types';
-import { activeId, finishTrip, newTrip, odometer, setOdometer, vehicleById, vehicleName, type LiveTrip } from './garage';
+import { activeId, DERIVED_META, finishTrip, newTrip, odometer, setOdometer, vehicleById, vehicleName, type LiveTrip } from './garage';
 import { kv } from './store';
 import { checkSignal, resetSignals } from './alerts';
 import { metres, simGps, startGps, stopGps } from './gps';
@@ -24,7 +24,7 @@ let fakeGps: ReturnType<typeof simGps> | null = null;
 export type Status = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error';
 
 type PidMeta = { name: string; unit: string; min: number; max: number; dp: number };
-export const meta = (k: string): PidMeta => (PIDS as Record<string, PidMeta>)[k] ?? { name: k, unit: '', min: 0, max: 100, dp: 1 };
+export const meta = (k: string): PidMeta => (PIDS as Record<string, PidMeta>)[k] ?? DERIVED_META[k] ?? { name: k, unit: '', min: 0, max: 100, dp: 1 };
 
 const now = () => performance.now() / 1000;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -37,6 +37,8 @@ export const S = {
   elm: null as any,
   supported: null as Set<number> | null,
   ecu: null as string | null, // the module the live data comes from (see OBD.pickEcu)
+  modules: {} as Record<string, number[]>, // every module that answered at connect, and its supported Mode 01 PIDs
+  texts: {} as Record<string, { s: string[]; t: number }>, // sensors without a number formula: state text or raw hex
   dead: new Set<string>(),
   values: {} as Record<string, { v: number; t: number }>,
   history: {} as Record<string, [number, number][]>,
@@ -78,6 +80,15 @@ export function useWantedPids(keys: string[]) {
 export const isSupported = (k: string) => !S.supported || k === '42' || S.supported.has(parseInt(k, 16));
 const adapterVolts = () => !!S.supported && !S.supported.has(0x42);
 export const availableKeys = () => PID_KEYS.filter(isSupported) as string[];
+// Every Mode 01 sensor the live module reports (All sensors), numbers or not. Without a list, the known ones.
+export const allSensorKeys = (): string[] => {
+  if (!S.supported) return PID_KEYS as string[];
+  const keys = [...S.supported].filter(n => !isBitmapPid(n)).map(hex2);
+  if (!keys.includes('42')) keys.push('42'); // measured by the adapter
+  return keys.sort((a, b) => parseInt(a, 16) - parseInt(b, 16));
+};
+export const isNumeric = (k: string) => k in PIDS;
+export const textVal = (k: string) => (S.texts[k] && now() - S.texts[k].t < 30 ? S.texts[k].s : null);
 export const val = (k: string) => (S.values[k] && now() - S.values[k].t < 5 ? S.values[k].v : null);
 
 function wantedKeys() {
@@ -134,6 +145,9 @@ export async function connect(kind: ConnKind, deviceId?: string, name?: string, 
     S.elm = elm;
     S.supported = pick.supported;
     S.ecu = pick.ecu;
+    S.modules = pick.modules;
+    S.texts = {};
+    if (kind !== 'sim') saveScan(S.vehicle, elm.protocolName, pick);
     S.dead.clear();
     S.values = {};
     S.history = {};
@@ -237,6 +251,7 @@ async function reconnect(g: number, lostAt: number) {
       S.elm = elm;
       S.supported = pick.supported;
       S.ecu = pick.ecu;
+      S.modules = pick.modules;
       S.dead.clear();
       S.attempt = 0;
       lastOk = Date.now();
@@ -300,6 +315,15 @@ async function pollLoop(g: number) {
     for (const k of order) {
       if (!S.elm || busy || g !== gen) break;
       try {
+        if (!(k in PIDS)) { // a state or an unknown sensor: shown as text on All sensors, never logged
+          const r = await OBD.text(S.elm, k);
+          lastOk = Date.now();
+          if (r == null) { if ((fails[k] = (fails[k] || 0) + 1) >= 5) S.dead.add(k); continue; }
+          fails[k] = 0;
+          S.texts[k] = { s: r, t: now() };
+          emit();
+          continue;
+        }
         const v = k === '42' && adapterVolts()
           ? parseFloat((await S.elm.text('ATRV')).replace(/[^0-9.]/g, '')) || null
           : await OBD.value(S.elm, k);
@@ -329,6 +353,12 @@ function autoEnd() {
   S.dead.clear(); // signals that stopped answering with the engine off get another chance
   S.stats = {};
   emit(true);
+}
+
+// The last module scan of each car, kept on the phone so All sensors can show it while disconnected.
+export type ModuleScan = { at: number; protocol: string; ecu: string | null; modules: Record<string, number[]> };
+function saveScan(car: string, protocol: string, pick: { ecu: string | null; modules: Record<string, number[]> }) {
+  if (car && Object.keys(pick.modules).length) kv.set<ModuleScan>('modules.' + car, { at: Date.now(), protocol, ecu: pick.ecu, modules: pick.modules });
 }
 
 function setValue(k: string, v: number) {
