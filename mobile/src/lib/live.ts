@@ -7,7 +7,7 @@ import { OBD, PIDS, PID_KEYS, hex2, isBitmapPid } from './obd/obd';
 import { SimTransport } from './obd/simulator';
 import { BleTransport, ClassicTransport, classicReady, scanBle } from './transports/bluetooth';
 import type { ConnKind, Transport } from './transports/types';
-import { activeId, DERIVED_META, finishTrip, newTrip, odometer, setOdometer, vehicleById, vehicleName, type LiveTrip } from './garage';
+import { activeId, DERIVED_META, fuelRateFrom, finishTrip, newTrip, odometer, setOdometer, vehicleById, vehicleName, type LiveTrip } from './garage';
 import { kv } from './store';
 import { checkSignal, resetSignals } from './alerts';
 import { metres, simGps, startGps, stopGps } from './gps';
@@ -378,16 +378,7 @@ function setValue(k: string, v: number) {
 }
 
 export function fuelRateLh() {
-  const r = val('5E');
-  if (r != null) return r;
-  const maf = val('10');
-  if (maf == null) return null;
-  // gasoline: stoichiometric AFR 14.7, 740 g/L. The fuel trims say how much fuel the ECU adds on top of what the MAF
-  // implies (an air leak after the MAF, for example), so they correct the estimate. Banks averaged when both report.
-  const bank = (s: string, l: string) => (val(s) != null || val(l) != null ? (val(s) ?? 0) + (val(l) ?? 0) : null);
-  const trims = [bank('06', '07'), bank('08', '09')].filter((x): x is number => x != null);
-  const trim = trims.length ? trims.reduce((a, b) => a + b, 0) / trims.length : 0;
-  return ((maf * 3600) / (14.7 * 740)) * (1 + Math.max(-25, Math.min(40, trim)) / 100);
+  return fuelRateFrom(val, vehicleById(S.vehicle)?.fuel ?? 'petrol');
 }
 
 // The trip in progress is copied to the phone's storage every 15 s, so it survives the app being killed mid-drive.

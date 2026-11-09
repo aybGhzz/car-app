@@ -36,15 +36,15 @@ export const DERIVED_META: Record<string, { name: string; unit: string; min: num
   FR: { name: 'Fuel rate', unit: 'L/h', min: 0, max: 40, dp: 1 },
   L100: { name: 'Fuel consumption', unit: 'L/100km', min: 0, max: 30, dp: 1 },
 };
-const hasFuel = (tr: Trip) => tr.samples.some(s => s[4] != null);
+const hasFuel = (tr: Trip) => withFuelFromLog(tr).some(s => s[4] != null);
 export function tripKeys(tr: Trip): string[] {
   const base = tr.log?.keys.length ? tr.log.keys : Object.keys(SAMPLE_COL).filter(k => tr.samples.some(s => s[SAMPLE_COL[k]] != null));
   if (!hasFuel(tr)) return base;
   return [...base, ...(base.includes('5E') ? [] : ['FR']), 'L100'];
 }
 export function tripSeries(tr: Trip, key: string): [number, number][] {
-  if (key === 'FR') return tr.samples.filter(s => s[4] != null).map(s => [s[0], s[4]!]);
-  if (key === 'L100') return consumptionSeries(tr.samples);
+  if (key === 'FR') return withFuelFromLog(tr).filter(s => s[4] != null).map(s => [s[0], s[4]!]);
+  if (key === 'L100') return consumptionSeries(withFuelFromLog(tr));
   if (tr.log?.keys.length) {
     const i = tr.log.keys.indexOf(key) + 1;
     return i ? tr.log.rows.filter(r => r[i] != null).map(r => [r[0]!, r[i]!]) : [];
@@ -64,6 +64,47 @@ function consumptionSeries(samples: Sample[], win = 10): [number, number][] {
     if (v1 > 3 && km > 0.01) out.push([t1, Math.min(50, (L / km) * 100)]);
   }
   return out;
+}
+
+// Fuel rate in L/h from one moment's PID values (get returns null when a PID is missing).
+// PID 5E (engine fuel rate) is used as is when the car reports it. Otherwise it is estimated from the MAF:
+// - petrol: burns at a fixed air/fuel ratio (14.7, 740 g/L). The fuel trims say how much fuel the ECU adds on top
+//   of what the MAF implies (an air leak after the MAF, for example), so they correct it. Banks averaged.
+// - diesel: no fixed ratio. A diesel runs very lean (about 55:1 at idle, about 22:1 under full load), so the petrol
+//   ratio overstated it about 4 times. The fuel/air ratio is taken from the engine load instead:
+//   λ⁻¹ = 0.25 + 0.0045 × load %, at 14.5:1 and 832 g/L. Fitted on two Ford Fiesta 1.5 TDCi trips that report
+//   PID 5E: within 3 % of the car's own figure.
+// Engine off (0 rpm) burns nothing, and MAF 655.35 g/s (FFFF) is the ECU saying "no value", not air.
+export function fuelRateFrom(get: (k: string) => number | null | undefined, fuel: Fuel = 'petrol'): number | null {
+  const v = (k: string) => get(k) ?? null;
+  const r = v('5E');
+  if (r != null) return r;
+  if (fuel === 'electric') return null;
+  const maf = v('10');
+  if (maf == null || maf >= 655) return null;
+  if (v('0C') === 0) return 0;
+  if (fuel === 'diesel') {
+    const load = v('04');
+    const phi = load == null ? 0.35 : Math.min(0.9, 0.25 + 0.0045 * load);
+    return (maf * phi * 3600) / (14.5 * 832);
+  }
+  const bank = (s: string, l: string) => (v(s) != null || v(l) != null ? (v(s) ?? 0) + (v(l) ?? 0) : null);
+  const trims = [bank('06', '07'), bank('08', '09')].filter((x): x is number => x != null);
+  const trim = trims.length ? trims.reduce((a, b) => a + b, 0) / trims.length : 0;
+  return ((maf * 3600) / (14.7 * 740)) * (1 + Math.max(-25, Math.min(40, trim)) / 100);
+}
+
+// Trips recorded before the diesel formula stored a petrol estimate. When the trip has its signal log and the car
+// gives no PID 5E, the fuel rate is worked out again from the log with the car's fuel type.
+export function withFuelFromLog(tr: Trip): Sample[] {
+  const log = tr.log;
+  if (!log?.keys.includes('10') || log.keys.includes('5E') || log.rows.length !== tr.samples.length) return tr.samples;
+  const fuel = vehicleById(tr.vehicle ?? '')?.fuel ?? 'petrol', col = new Map(log.keys.map((k, i) => [k, i + 1]));
+  return tr.samples.map((s, i) => {
+    const row = log.rows[i];
+    const rate = fuelRateFrom(k => (col.has(k) ? row[col.get(k)!] : null), fuel);
+    return [s[0], s[1], s[2], s[3], rate == null ? null : Math.round(rate * 100) / 100];
+  });
 }
 
 export function tripStats(samples: Sample[]) {
@@ -209,7 +250,7 @@ const demoTrips = () => (demoCache ??= [
 const statsCache = new WeakMap<Trip, TripWithStats>();
 // All trips, or only one vehicle's. Trips saved before vehicles existed count as the first vehicle's.
 // The sample trips are left out once the user turns off demo data in Settings.
-const statsOf = (tr: Trip): TripStats => (tr.summary && !tr.samples.length ? { ...tripStats([]), ...tr.summary } : tripStats(tr.samples));
+const statsOf = (tr: Trip): TripStats => (tr.summary && !tr.samples.length ? { ...tripStats([]), ...tr.summary } : tripStats(withFuelFromLog(tr)));
 export const withStats = (trips: Trip[], vehicle?: string, demo = kv.get<{ demo?: boolean }>('settings', {}).demo !== false) =>
   trips.map(tr => statsCache.get(tr) ?? (statsCache.set(tr, { ...tr, stats: statsOf(tr) }), statsCache.get(tr)!)).concat(demo ? demoTrips() : [])
     .filter(tr => !vehicle || (tr.vehicle ?? VEHICLES_DEFAULT[0].id) === vehicle)
