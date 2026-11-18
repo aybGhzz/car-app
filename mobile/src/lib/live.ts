@@ -1,28 +1,33 @@
 // The live connection: connect / disconnect, the polling loop, and the trip being recorded.
 // Screens declare the PIDs they show with useWantedPids(); only those (plus what the trip log needs) are polled.
 import { useEffect, useSyncExternalStore } from 'react';
+import { PermissionsAndroid, Platform } from 'react-native';
 import { ELM327 } from './obd/elm327';
-import { OBD, PIDS, PID_KEYS, moduleName } from './obd/obd';
+import { OBD, PIDS, PID_KEYS, hex2, isBitmapPid, moduleRole } from './obd/obd';
 import { adapterLog, endDiagLog, startDiagLog } from './adapterLog';
 import { SimTransport } from './obd/simulator';
-import { BleTransport, ClassicTransport } from './transports/bluetooth';
+import { BleTransport, ClassicTransport, classicReady, scanBle } from './transports/bluetooth';
 import type { ConnKind, Transport } from './transports/types';
-import { activeId, finishTrip, newTrip, odometer, setOdometer, vehicleById, type LiveTrip } from './garage';
+import { activeId, DERIVED_META, fuelRateFrom, finishTrip, newTrip, odometer, setOdometer, vehicleById, vehicleName, type LiveTrip } from './garage';
 import { kv } from './store';
 import { checkSignal, resetSignals } from './alerts';
 import { metres, simGps, startGps, stopGps } from './gps';
 import { vehicleSettings, settings } from './settings';
+import { savedAdapter, saveAdapter, type SavedAdapter } from './adapters';
+import { t as tr } from './i18n';
+import { batteryUnrestricted, onServiceAction, requestBatteryUnrestricted, startService, stopService, updateService } from '../../modules/vindici-service';
 
 // Signals written to the trip log once a second (when the car supports them), for the trip charts.
 const LOG_KEYS = ['0D', '0C', '11', '04', '05', '0F', '5C', '5E', '10', '42', '0B', '2F', '06', '07', '08', '09'];
 let fakeGps: ReturnType<typeof simGps> | null = null;
 
-export type Status = 'idle' | 'connecting' | 'connected' | 'error';
+// 'reconnecting': the adapter dropped mid-drive; the trip stays open while the app tries to get it back.
+export type Status = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error';
 // Adapter mode (see ELM327.setMode): 'live' while polling, 'diag' while reading or clearing codes. Chosen by the app.
 export type Mode = 'live' | 'diag';
 
 type PidMeta = { name: string; unit: string; min: number; max: number; dp: number };
-export const meta = (k: string): PidMeta => (PIDS as Record<string, PidMeta>)[k] ?? { name: k, unit: '', min: 0, max: 100, dp: 1 };
+export const meta = (k: string): PidMeta => (PIDS as Record<string, PidMeta>)[k] ?? DERIVED_META[k] ?? { name: k, unit: '', min: 0, max: 100, dp: 1 };
 
 const now = () => performance.now() / 1000;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -36,12 +41,17 @@ export const S = {
   mode: null as Mode | null,
   supported: null as Set<number> | null,
   ecu: null as string | null, // the module the live data comes from (see OBD.pickEcu)
+  modules: {} as Record<string, number[]>, // every module that answered at connect, and its supported Mode 01 PIDs
+  texts: {} as Record<string, { s: string[]; t: number }>, // sensors without a number formula: state text or raw hex
   dead: new Set<string>(),
   values: {} as Record<string, { v: number; t: number }>,
   history: {} as Record<string, [number, number][]>,
   lastActive: 0, // last time the engine turned or the car moved, for ending a trip automatically
   stats: {} as Record<string, { min: number; max: number; sum: number; n: number }>, // since connecting, for min / avg / max
   trip: newTrip() as LiveTrip,
+  attempt: 0, // reconnect attempts so far
+  prompt: 0, // bumped when the connect sheet should open by itself (the remembered adapter did not answer)
+  failed: null as SavedAdapter | null, // that adapter
   version: 0, // bumped on every change; components subscribe to it
 };
 
@@ -90,6 +100,15 @@ export function useWantedPids(keys: string[]) {
 export const isSupported = (k: string) => !S.supported || k === '42' || S.supported.has(parseInt(k, 16));
 const adapterVolts = () => !!S.supported && !S.supported.has(0x42);
 export const availableKeys = () => PID_KEYS.filter(isSupported) as string[];
+// Every Mode 01 sensor the live module reports (All sensors), numbers or not. Without a list, the known ones.
+export const allSensorKeys = (): string[] => {
+  if (!S.supported) return PID_KEYS as string[];
+  const keys = [...S.supported].filter(n => !isBitmapPid(n)).map(hex2);
+  if (!keys.includes('42')) keys.push('42'); // measured by the adapter
+  return keys.sort((a, b) => parseInt(a, 16) - parseInt(b, 16));
+};
+export const isNumeric = (k: string) => k in PIDS;
+export const textVal = (k: string) => (S.texts[k] && now() - S.texts[k].t < 30 ? S.texts[k].s : null);
 export const val = (k: string) => (S.values[k] && now() - S.values[k].t < 5 ? S.values[k].v : null);
 
 function wantedKeys() {
@@ -104,27 +123,57 @@ function setStatus(status: Status, message: string) {
   emit(true);
 }
 
-export async function connect(kind: ConnKind, deviceId?: string) {
-  const t: Transport = kind === 'sim' ? Object.assign(new SimTransport(), { odoStart: odometer().value }) // the fake car shares the selected vehicle's mileage
-    : kind === 'classic' ? new ClassicTransport(deviceId!) : new BleTransport(deviceId!);
-  S.kind = kind;
-  S.vehicle = activeId();
-  S.mode = null;
-  setStatus('connecting', 'Connecting…');
-  adapterLog('#', `connect ${kind}${deviceId ? ' ' + deviceId : ''}`);
+type Link = { kind: ConnKind; id?: string; name?: string };
+let link: Link | null = null; // what the user asked to be connected to, kept through reconnects
+let gen = 0; // bumped on every connect / disconnect / drop, so a stale loop or reconnect attempt stops by itself
+let lastOk = 0; // last time the adapter answered anything (NO DATA counts): no answer for STALL_MS = the link is dead
+const STALL_MS = 10_000;
+
+const withTimeout = <T,>(p: Promise<T>, ms: number, msg: string) =>
+  Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(msg)), ms))]);
+
+// Opens the transport, initializes the ELM327 and finds the engine module. Used by connect and by every reconnect.
+async function openLink(l: Link, g: number) {
+  const t: Transport = l.kind === 'sim' ? Object.assign(new SimTransport(), { odoStart: odometer().value }) // the fake car shares the selected vehicle's mileage
+    : l.kind === 'classic' ? new ClassicTransport(l.id!) : new BleTransport(l.id!);
+  t.onLost = () => { if (g === gen) lost(); };
   try {
-    await t.open();
+    await withTimeout(t.open(), 15_000, 'The adapter did not answer. Is it plugged in and the ignition on?');
     const elm = new ELM327(t, adapterLog);
-    setStatus('connecting', 'Initializing adapter and detecting protocol…');
+    if (g === gen) setStatus(S.status === 'reconnecting' ? 'reconnecting' : 'connecting', S.status === 'reconnecting' ? S.message : 'Initializing adapter and detecting protocol…');
     await elm.init();
     adapterLog('#', `adapter ${elm.version} · protocol ${elm.protocolNumber} ${elm.protocolName}`);
-    S.elm = elm;
-    setStatus('connecting', 'Finding the engine module…');
+    if (g === gen && S.status === 'connecting') setStatus('connecting', 'Finding the engine module…');
     const pick = await OBD.pickEcu(elm, [...LOG_KEYS, 'A6']); // ends in live mode
-    S.mode = elm.mode;
     adapterLog('#', `modules ${JSON.stringify(pick.ecus)} · live data from ${pick.ecu ?? 'any'}`);
+    return { elm, pick };
+  } catch (e: any) {
+    adapterLog('!', 'connect failed: ' + (e?.message ?? e));
+    try { await t.close(); } catch {}
+    throw e;
+  }
+}
+
+export async function connect(kind: ConnKind, deviceId?: string, name?: string, opts: { auto?: boolean } = {}) {
+  if (S.status === 'connecting' || S.status === 'connected' || S.status === 'reconnecting') return false;
+  const g = ++gen;
+  link = { kind, id: deviceId, name };
+  S.kind = kind;
+  S.vehicle = activeId();
+  S.failed = null;
+  S.mode = null;
+  setStatus('connecting', opts.auto && name ? tr('Connecting to') + ' ' + name + '…' : 'Connecting…');
+  adapterLog('#', `connect ${kind}${deviceId ? ' ' + deviceId : ''}`);
+  try {
+    const { elm, pick } = await openLink(link, g);
+    if (g !== gen) { try { await elm.t.close(); } catch {} return false; } // disconnected while connecting
+    S.elm = elm;
+    S.mode = elm.mode;
     S.supported = pick.supported;
     S.ecu = pick.ecu;
+    S.modules = pick.modules;
+    S.texts = {};
+    if (kind !== 'sim') saveScan(S.vehicle, elm.protocolName, pick);
     S.dead.clear();
     S.values = {};
     S.history = {};
@@ -135,62 +184,200 @@ export async function connect(kind: ConnKind, deviceId?: string) {
     const car = vehicleById(S.vehicle);
     const gps = vehicleSettings(S.vehicle, car?.fuel ?? 'petrol').gps;
     if (kind === 'sim') { if (gps) fakeGps = simGps(); }
-    else startGps(addFix, gps); // also keeps recording in the background (see gps.ts)
+    else {
+      saveAdapter(S.vehicle, { kind, id: deviceId!, name: name || deviceId! }); // offered first next time (lib/adapters.ts)
+      startBackground(gps);
+    }
     S.lastActive = Date.now();
+    lastOk = Date.now();
     setStatus('connected', elm.protocolName + (pick.ecu ? ' · ECU ' + pick.ecu : ''));
-    pollLoop();
+    pollLoop(g);
+    if (kind !== 'sim') askBatteryOnce();
+    return true;
   } catch (e: any) {
-    adapterLog('!', 'connect failed: ' + (e?.message ?? e));
-    S.elm = null;
+    if (g !== gen) return false;
     S.mode = null;
-    setStatus('error', e?.message ?? String(e));
-    try { await t.close(); } catch {}
+    link = null;
+    if (opts.auto && kind !== 'sim') {
+      S.failed = savedAdapter(S.vehicle);
+      setStatus('error', 'The last adapter did not answer. Try again or pick another one.');
+      S.prompt++;
+      emit(true);
+    } else setStatus('error', e?.message ?? String(e));
+    return false;
   }
 }
 
 export async function disconnect() {
+  gen++;
+  link = null;
   const elm = S.elm;
   S.elm = null;
   S.mode = null;
+  S.attempt = 0;
   adapterLog('#', 'disconnect');
   setStatus('idle', 'Disconnected');
-  stopGps();
+  stopBackground();
   fakeGps = null;
   closeLive();
   S.trip = newTrip();
   try { await elm?.t.close(); } catch {}
 }
 
-async function pollLoop() {
+// ---------- automatic connection to the remembered adapter ----------
+let autoTried = '';
+// At start-up and after signing in: connects to the adapter last used with the selected car. If it does not answer,
+// the connect sheet opens with it on top, next to the usual list.
+export async function autoConnect() {
+  if (Platform.OS !== 'android' || !settings().autoConnect || S.status !== 'idle') return;
+  const car = activeId(), a = savedAdapter(car);
+  if (!a || autoTried === car + a.id) return;
+  autoTried = car + a.id; // once per car and adapter per app start
+  if (a.kind === 'classic' && !(await classicReady(a.id).catch(() => false))) {
+    S.failed = a;
+    setStatus('error', 'The last adapter did not answer. Try again or pick another one.');
+    S.prompt++;
+    emit(true);
+    return;
+  }
+  if (await connect(a.kind, a.id, a.name, { auto: a.kind === 'classic' })) return;
+  if (a.kind === 'ble') { // a BLE adapter can need a short scan before Android connects to it again
+    const seen = await scanBle(4).catch(() => []);
+    if (seen.some(d => d.id === a.id) && (await connect('ble', a.id, a.name))) return;
+    S.failed = a;
+    setStatus('error', 'The last adapter did not answer. Try again or pick another one.');
+    S.prompt++;
+    emit(true);
+  }
+}
+
+// ---------- reconnect while driving ----------
+// The adapter dropped (unplugged, out of range, Bluetooth off) or stopped answering. The trip stays open and the
+// background service keeps running (Android does not let an app start it again from the background), while the app
+// tries again: after 1, 2, 4, 8, 15 s, then every 30 s. It gives up after the auto-end time (Settings > Trips, at
+// least 2 min, 10 min when auto-end is off) and saves the trip.
+function lost() {
+  if (!link || link.kind === 'sim' || S.status !== 'connected') return;
+  const g = ++gen;
+  const elm = S.elm;
+  S.elm = null;
+  S.mode = null;
+  adapterLog('!', 'adapter lost, reconnecting');
+  elm?.t.close().catch(() => {});
+  reconnect(g, Date.now());
+}
+
+async function reconnect(g: number, lostAt: number) {
+  const delays = [1, 2, 4, 8, 15], min = settings().autoEndMin;
+  const giveUpMs = (min ? Math.max(2, min) : 10) * 60_000;
+  for (let n = 1; ; n++) {
+    S.attempt = n;
+    setStatus('reconnecting', 'Reconnecting to the adapter…');
+    updateService(tr('Reconnecting to the adapter…'), `${carLabel()} · ${tr('attempt')} ${n}`);
+    await sleep((delays[n - 1] ?? 30) * 1000);
+    if (g !== gen || !link) return;
+    try {
+      const { elm, pick } = await openLink(link, g);
+      if (g !== gen) { elm.t.close().catch(() => {}); return; }
+      S.elm = elm;
+      S.mode = elm.mode;
+      S.supported = pick.supported;
+      S.ecu = pick.ecu;
+      S.modules = pick.modules;
+      S.dead.clear();
+      S.attempt = 0;
+      lastOk = Date.now();
+      setStatus('connected', elm.protocolName + (pick.ecu ? ' · ECU ' + pick.ecu : ''));
+      updateService(tr('Vindici is recording your trip'), carLabel());
+      pollLoop(g);
+      return;
+    } catch {
+      if (g !== gen) return;
+      if (Date.now() - lostAt > giveUpMs) {
+        gen++;
+        link = null;
+        S.attempt = 0;
+        closeLive(lostAt);
+        S.trip = newTrip();
+        stopBackground();
+        setStatus('error', 'Lost the adapter. The trip was saved.');
+        return;
+      }
+    }
+  }
+}
+
+// ---------- background (Android foreground service, modules/vindici-service) ----------
+const carLabel = () => { const v = vehicleById(S.vehicle); return v ? vehicleName(v) : ''; };
+async function startBackground(gps: boolean) {
+  if (Platform.OS !== 'android') { startGps(addFix, gps); return; }
+  // Android 13+: without this permission the service still runs, but its notification is hidden.
+  if (Platform.Version >= 33) await PermissionsAndroid.request('android.permission.POST_NOTIFICATIONS' as any).catch(() => {});
+  const route = await startGps(addFix, gps); // asks for location ("While using the app" is enough)
+  startService({ title: tr('Vindici is recording your trip'), body: carLabel(), stopLabel: tr('Disconnect'), channel: tr('Trip recording'), gps: route });
+}
+function stopBackground() {
+  stopGps();
+  stopService();
+}
+// Once, at the first real connection: the system dialog that lets the app run in the background without limits.
+function askBatteryOnce() {
+  if (kv.get('bg.batteryAsked', false) || batteryUnrestricted() !== false) return;
+  kv.set('bg.batteryAsked', true);
+  setTimeout(() => requestBatteryUnrestricted(), 1500);
+}
+onServiceAction?.(a => { if (a === 'disconnect') disconnect(); }); // the notification's Disconnect button
+
+let notifiedAt = 0;
+function notifyProgress() {
+  if (S.kind === 'sim' || Date.now() - notifiedAt < 5000) return;
+  notifiedAt = Date.now();
+  const v = val('0D');
+  updateService(tr('Vindici is recording your trip'), [carLabel(), v != null ? Math.round(v) + ' km/h' : null, S.trip.dist.toFixed(1) + ' km'].filter(Boolean).join(' · '));
+}
+
+async function pollLoop(g: number) {
   const fails: Record<string, number> = {};
-  while (S.elm) {
+  while (S.elm && g === gen) {
     // Speed drives the trip distance, so read it between every few other signals: on a slow adapter or an older
     // car (K-line), a full round of signals can take several seconds.
     const keys = wantedKeys(), order: string[] = [];
     keys.filter(k => k !== '0D').forEach((k, i) => { if (keys.includes('0D') && i % 3 === 0) order.push('0D'); order.push(k); });
     if (!order.length && keys.includes('0D')) order.push('0D');
     for (const k of order) {
-      if (!S.elm || busy) break;
+      if (!S.elm || busy || g !== gen) break;
       try {
         const elm = S.elm;
-        const v = await locked(async () => {
-          if (busy || S.elm !== elm) return undefined; // a one-shot request queued meanwhile: let it go first
+        const r = await locked(async (): Promise<{ skip: true } | { text: string[] | null } | { v: number | null }> => {
+          if (busy || S.elm !== elm) return { skip: true }; // a one-shot request queued meanwhile: let it go first
           await ensureMode(elm, 'live');
-          return k === '42' && adapterVolts()
+          if (!(k in PIDS)) return { text: await OBD.text(elm, k) }; // a state or an unknown sensor
+          return { v: k === '42' && adapterVolts()
             ? parseFloat((await elm.text('ATRV')).replace(/[^0-9.]/g, '')) || null
-            : await OBD.value(elm, k);
+            : await OBD.value(elm, k) };
         });
-        if (v === undefined) break;
+        if ('skip' in r) break;
+        lastOk = Date.now(); // it answered, even if with NO DATA
+        if ('text' in r) { // shown as text on All sensors, never logged
+          if (r.text == null) { if ((fails[k] = (fails[k] || 0) + 1) >= 5) S.dead.add(k); continue; }
+          fails[k] = 0;
+          S.texts[k] = { s: r.text, t: now() };
+          emit();
+          continue;
+        }
+        const v = r.v;
         if (v == null) { if ((fails[k] = (fails[k] || 0) + 1) >= 5 && k !== '0C' && k !== '0D') S.dead.add(k); continue; } // rpm and speed stay polled: they tell when the engine starts again
         fails[k] = 0;
         setValue(k, v);
       } catch {
-        if (!S.elm) return;
+        if (!S.elm || g !== gen) return;
+        if (Date.now() - lastOk > STALL_MS) { lost(); return; } // no answer to anything: the link is dead
         await sleep(200);
       }
     }
     await sleep(busy ? 200 : 20);
     autoEnd();
+    notifyProgress();
   }
 }
 
@@ -204,6 +391,12 @@ function autoEnd() {
   S.dead.clear(); // signals that stopped answering with the engine off get another chance
   S.stats = {};
   emit(true);
+}
+
+// The last module scan of each car, kept on the phone so All sensors can show it while disconnected.
+export type ModuleScan = { at: number; protocol: string; ecu: string | null; modules: Record<string, number[]> };
+function saveScan(car: string, protocol: string, pick: { ecu: string | null; modules: Record<string, number[]> }) {
+  if (car && Object.keys(pick.modules).length) kv.set<ModuleScan>('modules.' + car, { at: Date.now(), protocol, ecu: pick.ecu, modules: pick.modules });
 }
 
 function setValue(k: string, v: number) {
@@ -223,16 +416,7 @@ function setValue(k: string, v: number) {
 }
 
 export function fuelRateLh() {
-  const r = val('5E');
-  if (r != null) return r;
-  const maf = val('10');
-  if (maf == null) return null;
-  // gasoline: stoichiometric AFR 14.7, 740 g/L. The fuel trims say how much fuel the ECU adds on top of what the MAF
-  // implies (an air leak after the MAF, for example), so they correct the estimate. Banks averaged when both report.
-  const bank = (s: string, l: string) => (val(s) != null || val(l) != null ? (val(s) ?? 0) + (val(l) ?? 0) : null);
-  const trims = [bank('06', '07'), bank('08', '09')].filter((x): x is number => x != null);
-  const trim = trims.length ? trims.reduce((a, b) => a + b, 0) / trims.length : 0;
-  return ((maf * 3600) / (14.7 * 740)) * (1 + Math.max(-25, Math.min(40, trim)) / 100);
+  return fuelRateFrom(val, vehicleById(S.vehicle)?.fuel ?? 'petrol');
 }
 
 // The trip in progress is copied to the phone's storage every 15 s, so it survives the app being killed mid-drive.
@@ -294,7 +478,9 @@ async function exclusive<T>(mode: Mode, fn: (elm: any) => Promise<T>): Promise<T
     return await locked(async () => {
       if (S.elm !== elm) throw new Error('Not connected');
       await ensureMode(elm, mode);
-      return fn(elm);
+      const r = await fn(elm);
+      lastOk = Date.now(); // a long diag read must not look like a dead link to the polling loop's stall check
+      return r;
     });
   } finally { busy--; }
 }
@@ -312,7 +498,7 @@ export type CodesResult = {
   readiness: (Readiness & { count: number }) | null;
 };
 
-const label = (ecu: string) => ({ ecu, module: moduleName(ecu) as string });
+const label = (ecu: string) => ({ ecu, module: moduleRole(ecu) as string });
 const flat = (ecus: Record<string, string[]>): ModuleCode[] =>
   Object.keys(ecus).sort().flatMap(ecu => ecus[ecu].map(code => ({ code, ...label(ecu) })));
 

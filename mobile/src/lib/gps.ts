@@ -4,54 +4,39 @@ import { Platform } from 'react-native';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 
+import { available as serviceAvailable, onServiceGps } from '../../modules/vindici-service';
+
 type Fix = (lat: number, lng: number) => void;
 let sub: { remove: () => void } | null = null;
-let handler: Fix | null = null;
-let background = false;
 
-// On Android, while connected to a real adapter, the location updates run in a foreground service (a notification
-// says the trip is being recorded). That keeps the app alive when the user switches to another app or locks the
-// phone, so the adapter keeps being read. Defined at the top level, as the task manager requires.
+// Before this build, Android recording used an expo-location background task, which needed "Allow all the time".
+// The app's own foreground service (modules/vindici-service) now keeps it alive and reads the GPS itself, with
+// "While using the app". Stop the old task if an earlier version left it running.
 const TASK = 'vindici-trip';
 if (Platform.OS !== 'web') {
-  TaskManager.defineTask(TASK, async ({ data, error }: any) => {
-    if (error || !handler) return;
-    for (const l of (data?.locations ?? []) as Location.LocationObject[]) handler(l.coords.latitude, l.coords.longitude);
-  });
+  TaskManager.defineTask(TASK, async () => {});
+  Location.hasStartedLocationUpdatesAsync(TASK).then(on => (on ? Location.stopLocationUpdatesAsync(TASK) : undefined)).catch(() => {});
 }
 
-// `route`: record fixes (the car's GPS setting). Without it the service still runs, with coarse low-power updates,
-// only to keep recording in the background.
+// `route`: record fixes (the car's GPS setting). Resolves true when fixes will arrive. On Android with the service,
+// the fixes come from the service, which must then be started with gps: true (lib/live.ts startBackground).
 export async function startGps(onFix: Fix, route = true) {
   await stopGps();
+  if (!route) return false;
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return false;
-    handler = route ? onFix : null;
-    if (Platform.OS === 'android') {
-      const bg = await Location.requestBackgroundPermissionsAsync().catch(() => ({ status: 'denied' }));
-      if (bg.status === 'granted') {
-        await Location.startLocationUpdatesAsync(TASK, {
-          accuracy: route ? Location.Accuracy.High : Location.Accuracy.Lowest,
-          distanceInterval: route ? 15 : 200, timeInterval: 3000,
-          foregroundService: { notificationTitle: 'Vindici is recording your trip', notificationBody: 'Connected to your car. Disconnect in the app to stop.', notificationColor: '#0f7d74', killServiceOnDestroy: false },
-        });
-        background = true;
-        return true;
-      }
+    if (Platform.OS === 'android' && serviceAvailable) {
+      sub = onServiceGps(onFix) ?? null;
+      return true;
     }
-    if (!route) return false; // no background permission: recording only while the app is on screen
     sub = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, distanceInterval: 15, timeInterval: 3000 },
       p => onFix(p.coords.latitude, p.coords.longitude));
     return true;
   } catch { return false; }
 }
 export async function stopGps() {
-  sub?.remove(); sub = null; handler = null;
-  if (background) {
-    background = false;
-    await Location.stopLocationUpdatesAsync(TASK).catch(() => {});
-  }
+  sub?.remove(); sub = null;
 }
 
 // Fake GPS for the simulator: a heading that slowly turns, advanced by speed × time.

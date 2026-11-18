@@ -34,7 +34,7 @@ export default function TripDetail() {
   const short = new Date(tr.start).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 
   return (
-    <Screen title="Trips" header={<BackHeader title={`${short}, ${fmtTime(tr.start)}`} onBack={back} right={tr.demo ? <DemoTag /> : tr.cloudId ? <CloudTag csv={tr.source === 'csv'} /> : undefined} />}>
+    <Screen wide title="Trips" header={<BackHeader title={`${short}, ${fmtTime(tr.start)}`} onBack={back} right={tr.demo ? <DemoTag /> : tr.cloudId ? <CloudTag csv={tr.source === 'csv'} /> : undefined} />}>
       <Animated.View entering={FadeIn.duration(500)}>
         {tr.path?.length > 1 ? <TripMap path={tr.path} height={240} />
           : <Card><T className="text-muted">{tr.ends?.[0] ? 'Only the start and end positions were recorded for this trip.' : 'No GPS position was recorded for this trip.'}</T></Card>}
@@ -44,6 +44,10 @@ export default function TripDetail() {
         <Key label="Duration" value={hm(s.time)} icon="time-outline" />
         <Key label="Distance" value={num(s.dist, 1)} unit="km" icon="navigate-outline" />
         <Key label="Average" value={num(s.avgSpeed)} unit="km/h" icon="speedometer-outline" />
+      </View>
+      <View className="mt-2.5 flex-row gap-2.5">
+        <Key label="Consumption" value={s.consumption == null ? '—' : num(s.consumption, 1)} unit="L/100km" icon="water-outline" />
+        <Key label="Fuel used" value={tr.source === 'csv' && !s.fuel ? '—' : num(s.fuel, 1)} unit="L" icon="beaker-outline" />
       </View>
 
       <Card className="mt-2.5">

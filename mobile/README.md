@@ -75,6 +75,9 @@ npx eas-cli@latest build -p android --profile preview      # gives a link to an 
 npx eas-cli@latest build -p android --profile development && npm run start:dev-build
 ```
 
+Versions: raise `version` in app.json before each build (1.1.0, 1.2.0…). The build number goes up by itself:
+eas.json keeps it on EAS (`appVersionSource: remote`, `autoIncrement`). Settings > About shows both, e.g. "1.1.0 (build 7)".
+
 Then tap the connection button in the header:
 
 | Adapter | Phone |
