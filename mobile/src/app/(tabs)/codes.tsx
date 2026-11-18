@@ -9,14 +9,16 @@ import { DotsLoader } from '../../components/Loaders';
 import { VehicleSwitcher } from '../../components/VehicleSwitcher';
 import { Sheet } from '../../components/Sheet';
 import { Button, Card, Empty, Pill, PressableScale, SectionTitle, T } from '../../components/ui';
-import { clearCodes, connect, readCodes, useLive } from '../../lib/live';
+import { clearCodes, connect, readCodes, useLive, type CodesResult, type ModuleCode } from '../../lib/live';
+import { shareAdapterLog } from '../../lib/adapterLog';
 import { useVehicle, useVehicles, type Vehicle } from '../../lib/garage';
 import { searchUrl, useSettings } from '../../lib/settings';
 import { describeDTC } from '../../lib/obd/dtc-db';
 import { t, useLang } from '../../lib/i18n';
 import { C } from '../../lib/theme';
 
-type Result = Awaited<ReturnType<typeof readCodes>>;
+type Result = CodesResult;
+const moduleLabel = (m: { ecu: string; module: string }) => `${t(m.module)} · ${m.ecu}`;
 
 function Radar({ active, onPress, disabled }: { active: boolean; onPress: () => void; disabled: boolean }) {
   const spin = useSharedValue(0), ring = useSharedValue(0);
@@ -54,11 +56,22 @@ function Radar({ active, onPress, disabled }: { active: boolean; onPress: () => 
   );
 }
 
+// Shares the adapter's transcript of the last read, to see what the car actually answered.
+function LogLink({ onPress }: { onPress: () => void }) {
+  return (
+    <PressableScale onPress={onPress} accessibilityRole="button" className="mt-2 flex-row items-center justify-center py-1.5">
+      <Ionicons name="document-text-outline" size={14} color={C.muted} />
+      <Text className="ml-1.5 text-xs font-semibold text-muted">{t('Share the adapter log')}</Text>
+    </PressableScale>
+  );
+}
+
 // "BMW 525i E60 2003 2.5 P0171": what the web search looks for, from the car the codes were read from.
 const searchQuery = (v: Vehicle | undefined, code: string) => [v?.make, v?.model, v?.year, v?.engine, code].filter(Boolean).join(' ');
 const ENGINE_NAME = { google: 'Google', bing: 'Bing', duckduckgo: 'DuckDuckGo' } as const;
 
-function CodeCard({ code, kind, index, car }: { code: string; kind: 'Stored' | 'Pending' | 'Permanent'; index: number; car?: Vehicle }) {
+function CodeCard({ item, kind, index, car }: { item: ModuleCode; kind: 'Stored' | 'Pending' | 'Permanent'; index: number; car?: Vehicle }) {
+  const { code } = item;
   const [open, setOpen] = useState(false);
   const { search } = useSettings();
   const q = searchQuery(car, code);
@@ -72,6 +85,10 @@ function CodeCard({ code, kind, index, car }: { code: string; kind: 'Stored' | '
             <View className="flex-row items-center">
               <Text style={{ fontFamily: 'monospace' }} className="mr-2 text-lg font-extrabold text-text">{code}</Text>
               <Pill kind={kind === 'Stored' ? 'bad' : kind === 'Pending' ? 'warn' : 'off'} text={kind} />
+            </View>
+            <View className="mt-1 flex-row items-center">
+              <Ionicons name="hardware-chip-outline" size={12} color={C.muted} />
+              <Text className="ml-1 text-[11px] font-semibold text-muted">{moduleLabel(item)}</Text>
             </View>
             <Text numberOfLines={open ? undefined : 2} className="mt-1.5 text-sm text-muted">{describeDTC(code)}</Text>
           </View>
@@ -110,14 +127,18 @@ export default function Codes() {
       await new Promise(f => setTimeout(f, Math.max(0, 1500 - (Date.now() - started)))); // let the sweep finish a turn
       setRes(r);
       Haptics.notificationAsync(r.stored.length ? Haptics.NotificationFeedbackType.Warning : Haptics.NotificationFeedbackType.Success).catch(() => {});
-    } catch (e: any) { setMsg(e?.message ?? String(e)); }
+    } catch (e: any) { setRes(null); setMsg(e?.message ?? String(e)); }
     setBusy('');
+  }
+
+  async function shareLog() {
+    try { await shareAdapterLog('diag'); } catch (e: any) { setMsg(e?.message ?? String(e)); }
   }
 
   async function clear() {
     setConfirm(false); setBusy('clear');
     try {
-      const ok = await clearCodes();
+      const ok = (await clearCodes()).length > 0;
       setMsg(ok ? 'Codes cleared.' : 'The ECU refused to clear codes.');
       setBusy('');
       if (ok) await read();
@@ -141,6 +162,7 @@ export default function Codes() {
           </>
         ) : null}
         {msg ? <Text className="mt-1 text-center text-warn">{t(msg)}</Text> : null}
+        {msg && !res && connected && !busy ? <LogLink onPress={shareLog} /> : null}
       </Card>
 
       {res ? (
@@ -153,15 +175,44 @@ export default function Codes() {
             <View className="flex-1">
               <Text className="text-base font-bold text-text">{t('Check engine light:')} {t(mil ? 'ON' : 'OFF')}</Text>
               <Text className="text-xs text-muted">{total ? t(`${total} code(s) found`) : t('No trouble codes.')}</Text>
+              <Text className="mt-0.5 text-[11px] text-muted">{t('Modules read:')} {res.modules.map(moduleLabel).join(', ')}</Text>
             </View>
           </Card>
+
+          {res.mismatch.length || res.unanswered.length || res.refused.length ? (
+            <Card index={2} className="mt-3">
+              {res.mismatch.map(m => (
+                <View key={m.ecu} className="mb-1.5 flex-row">
+                  <Ionicons name="alert-circle" size={16} color={C.bad} />
+                  <Text className="ml-1.5 flex-1 text-xs text-text">
+                    <Text className="font-bold">{moduleLabel(m)}: </Text>{t(`${m.reported} code(s) reported, ${m.read} read`)}
+                  </Text>
+                </View>
+              ))}
+              {res.refused.length ? (
+                <View className="mb-1.5 flex-row">
+                  <Ionicons name="alert-circle" size={16} color={C.warn} />
+                  <Text className="ml-1.5 flex-1 text-xs text-text">{t('Refused the request:')} {res.refused.join(', ')}</Text>
+                </View>
+              ) : null}
+              {res.unanswered.map(k => (
+                <View key={k} className="mb-1.5 flex-row">
+                  <Ionicons name="information-circle" size={16} color={C.muted} />
+                  <Text className="ml-1.5 flex-1 text-xs text-muted">
+                    {t(k === 'pending' ? 'No module answered the pending codes request.' : 'No module answered the permanent codes request (older cars do not support it).')}
+                  </Text>
+                </View>
+              ))}
+              {res.mismatch.length ? <LogLink onPress={shareLog} /> : null}
+            </Card>
+          ) : null}
 
           {(['Stored', 'Pending', 'Permanent'] as const).map(kind => {
             const list = res[kind.toLowerCase() as 'stored' | 'pending' | 'permanent'];
             return list.length ? (
               <View key={kind}>
                 <SectionTitle>{kind}</SectionTitle>
-                {list.map(c => <CodeCard key={kind + c} code={c} kind={kind} index={n++} car={car} />)}
+                {list.map(c => <CodeCard key={kind + c.ecu + c.code} item={c} kind={kind} index={n++} car={car} />)}
               </View>
             ) : null;
           })}
@@ -183,6 +234,7 @@ export default function Codes() {
           ) : null}
 
           {total ? <Button kind="danger" title={busy === 'clear' ? 'Clearing…' : 'Clear codes'} className="mt-5" disabled={!!busy} onPress={() => setConfirm(true)} /> : null}
+          {!busy ? <LogLink onPress={shareLog} /> : null}
         </>
       ) : connected && !busy ? <Empty text="Press the button to read the trouble codes." /> : null}
 

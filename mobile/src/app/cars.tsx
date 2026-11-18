@@ -7,7 +7,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { BackHeader } from '../components/BackHeader';
 import { Screen } from '../components/Screen';
 import { Button, Pill, PressableScale, T } from '../components/ui';
-import { dueStatus, fuelLabel, selectVehicle, serviceKey, serviceState, useVehicle, useVehicles, vehicleName, withStats, odometer,
+import { dueStatus, fuelLabel, selectVehicle, serviceKey, serviceState, useVehicle, useVehicles, vehicleName, useTrips, withStats, odometer,
   SERVICE_DEFAULT, DAY, type ServiceItem, type Trip, type Vehicle } from '../lib/garage';
 import { num, t, useLang } from '../lib/i18n';
 import { kv, useStored } from '../lib/store';
@@ -58,7 +58,7 @@ const Stat = ({ v, l }: { v: string; l: string }) => (
 export default function Cars() {
   useLang();
   const list = useVehicles(), cur = useVehicle();
-  const stored = useStored<Trip[]>('trips', []);
+  const stored = useTrips();
   const trips = useMemo(() => withStats(stored).map(tr => ({ ...tr, vehicle: tr.vehicle ?? list[0]?.id })), [stored, list]);
   useStored('odometer.' + cur.id, null); // refresh when the selected car's mileage changes
   return (

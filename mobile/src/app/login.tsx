@@ -1,4 +1,4 @@
-// Sign in / create an account. Until the backend exists the account lives on this device only (see lib/auth.ts).
+// Sign in / create an account: Supabase Auth when the app is configured for the cloud, otherwise on this phone only (lib/auth.ts).
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, Text, TextInput, View } from 'react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
@@ -9,7 +9,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DotsLoader } from '../components/Loaders';
 import { Logo } from '../components/Logo';
 import { Button, PressableScale, T } from '../components/ui';
-import { continueAsGuest, signIn } from '../lib/auth';
+import { continueAsGuest, googleEnabled, resetPassword, signIn, signInWithGoogle } from '../lib/auth';
+import { cloudEnabled } from '../lib/supabase';
 import { t, useLang } from '../lib/i18n';
 import { C } from '../lib/theme';
 
@@ -34,10 +35,19 @@ export default function Login() {
   const [name, setName] = useState(''), [email, setEmail] = useState(''), [pw, setPw] = useState('');
   const [busy, setBusy] = useState(false), [err, setErr] = useState(''), [info, setInfo] = useState('');
 
+  async function google() {
+    setErr(''); setInfo(''); setBusy(true);
+    const e = await signInWithGoogle();
+    setBusy(false);
+    if (e) return setErr(e);
+    if (e === null) router.replace('/');
+  }
+
   async function go() {
     setErr(''); setBusy(true);
     const e = await signIn(email, pw, signup ? name : undefined);
     setBusy(false);
+    if (e?.startsWith('Account created')) { setSignup(false); setInfo(e); return; } // confirm the email first
     if (e) return setErr(e);
     router.replace('/');
   }
@@ -60,16 +70,17 @@ export default function Login() {
           {signup ? <Input icon="person-outline" label="Name" value={name} onChange={setName} placeholder="Your name" /> : null}
           <Input icon="mail-outline" label="Email" value={email} onChange={setEmail} placeholder="Email" keyboard="email-address" />
           <Input icon="lock-closed-outline" label="Password" value={pw} onChange={setPw} placeholder="Password" secure />
-          {!signup ? <Text onPress={() => setInfo('Password reset will arrive with the online accounts.')} className="mb-4 self-end text-sm font-semibold text-accent">{t('Forgot password?')}</Text> : <View className="h-2" />}
+          {!signup ? <Text onPress={async () => { setErr(''); setInfo(await resetPassword(email)); }} className="mb-4 self-end text-sm font-semibold text-accent">{t('Forgot password?')}</Text> : <View className="h-2" />}
           {err ? <T className="mb-3 text-center text-sm text-bad">{err}</T> : null}
           {info ? <T className="mb-3 text-center text-sm text-muted">{info}</T> : null}
           {busy ? (
             <View style={{ height: 48 }} className="items-center justify-center rounded-2xl bg-panel"><DotsLoader /></View>
           ) : <Button kind="primary" title={signup ? 'Create account' : 'Sign in'} onPress={go} />}
+          {googleEnabled && !busy ? <Button title="Continue with Google" className="mt-3" onPress={google} /> : null}
           <View className="my-5 flex-row items-center"><View className="h-px flex-1 bg-line" /><T className="mx-3 text-xs text-muted">or</T><View className="h-px flex-1 bg-line" /></View>
           <Button title={signup ? 'I already have an account' : 'Create an account'} onPress={() => { setSignup(!signup); setErr(''); setInfo(''); }} />
           <Text onPress={() => { continueAsGuest(); router.replace('/'); }} className="mt-5 text-center text-sm font-semibold text-muted">{t('Continue without an account')}</Text>
-          <T className="mt-6 text-center text-[11px] text-muted">For now your account is kept on this phone only. Online accounts come with the backend.</T>
+          <T className="mt-6 text-center text-[11px] text-muted">{cloudEnabled ? 'Your cars, papers, services and trips are saved to your account and synced between your phones.' : 'For now your account is kept on this phone only. Online accounts come with the backend.'}</T>
         </Animated.View>
       </ScrollView>
     </KeyboardAvoidingView>

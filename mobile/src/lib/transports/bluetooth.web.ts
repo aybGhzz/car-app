@@ -13,3 +13,4 @@ export class ClassicTransport implements Transport {
   close = async () => {};
 }
 export class BleTransport extends ClassicTransport {}
+export const classicReady = async (_: string) => false;

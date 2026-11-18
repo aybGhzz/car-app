@@ -4,6 +4,10 @@ import { ELM327 } from './elm327';
 
 export const u16 = d => d[0] * 256 + d[1];
 export const hex2 = n => n.toString(16).toUpperCase().padStart(2, '0');
+const s16 = d => { const v = u16(d); return v >= 0x8000 ? v - 0x10000 : v; };
+// Eight O2 sensors in a row (24-2B, 34-3B): the first two bytes are the equivalence ratio (lambda).
+const o2Lambda = (first, name) => Object.fromEntries(Array.from({ length: 8 }, (_, i) => [hex2(parseInt(first, 16) + i),
+  { name: name.replace('$', String(i + 1)), unit: 'λ', min: 0.5, max: 1.5, dp: 3, bytes: 4, f: d => u16(d) * 2 / 65536 }]));
 
 // Mode 01 PIDs. min/max are the gauge range, not the protocol range.
 export const PIDS = {
@@ -11,6 +15,8 @@ export const PIDS = {
   '05': { name: 'Coolant temperature', unit: '°C', min: -40, max: 130, dp: 0, bytes: 1, f: d => d[0] - 40 },
   '06': { name: 'Short term fuel trim B1', unit: '%', min: -25, max: 25, dp: 1, bytes: 1, f: d => (d[0] - 128) * 100 / 128 },
   '07': { name: 'Long term fuel trim B1', unit: '%', min: -25, max: 25, dp: 1, bytes: 1, f: d => (d[0] - 128) * 100 / 128 },
+  '08': { name: 'Short term fuel trim B2', unit: '%', min: -25, max: 25, dp: 1, bytes: 1, f: d => (d[0] - 128) * 100 / 128 },
+  '09': { name: 'Long term fuel trim B2', unit: '%', min: -25, max: 25, dp: 1, bytes: 1, f: d => (d[0] - 128) * 100 / 128 },
   '0A': { name: 'Fuel pressure', unit: 'kPa', min: 0, max: 765, dp: 0, bytes: 1, f: d => d[0] * 3 },
   '0B': { name: 'Intake manifold pressure', unit: 'kPa', min: 0, max: 255, dp: 0, bytes: 1, f: d => d[0] },
   '0C': { name: 'Engine RPM', unit: 'rpm', min: 0, max: 8000, dp: 0, bytes: 2, f: d => u16(d) / 4 },
@@ -19,6 +25,14 @@ export const PIDS = {
   '0F': { name: 'Intake air temperature', unit: '°C', min: -40, max: 100, dp: 0, bytes: 1, f: d => d[0] - 40 },
   '10': { name: 'MAF air flow', unit: 'g/s', min: 0, max: 200, dp: 1, bytes: 2, f: d => u16(d) / 100 },
   '11': { name: 'Throttle position', unit: '%', min: 0, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 255 },
+  '14': { name: 'O2 sensor B1 S1 voltage', unit: 'V', min: 0, max: 1.275, dp: 2, bytes: 2, f: d => d[0] / 200 },
+  '15': { name: 'O2 sensor B1 S2 voltage', unit: 'V', min: 0, max: 1.275, dp: 2, bytes: 2, f: d => d[0] / 200 },
+  '16': { name: 'O2 sensor B1 S3 voltage', unit: 'V', min: 0, max: 1.275, dp: 2, bytes: 2, f: d => d[0] / 200 },
+  '17': { name: 'O2 sensor B1 S4 voltage', unit: 'V', min: 0, max: 1.275, dp: 2, bytes: 2, f: d => d[0] / 200 },
+  '18': { name: 'O2 sensor B2 S1 voltage', unit: 'V', min: 0, max: 1.275, dp: 2, bytes: 2, f: d => d[0] / 200 },
+  '19': { name: 'O2 sensor B2 S2 voltage', unit: 'V', min: 0, max: 1.275, dp: 2, bytes: 2, f: d => d[0] / 200 },
+  '1A': { name: 'O2 sensor B2 S3 voltage', unit: 'V', min: 0, max: 1.275, dp: 2, bytes: 2, f: d => d[0] / 200 },
+  '1B': { name: 'O2 sensor B2 S4 voltage', unit: 'V', min: 0, max: 1.275, dp: 2, bytes: 2, f: d => d[0] / 200 },
   '1F': { name: 'Run time since start', unit: 's', min: 0, max: 3600, dp: 0, bytes: 2, f: d => u16(d) },
   '21': { name: 'Distance with MIL on', unit: 'km', min: 0, max: 1000, dp: 0, bytes: 2, f: d => u16(d) },
   '2F': { name: 'Fuel level', unit: '%', min: 0, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 255 },
@@ -31,8 +45,78 @@ export const PIDS = {
   '46': { name: 'Ambient air temperature', unit: '°C', min: -40, max: 60, dp: 0, bytes: 1, f: d => d[0] - 40 },
   '5C': { name: 'Engine oil temperature', unit: '°C', min: -40, max: 150, dp: 0, bytes: 1, f: d => d[0] - 40 },
   '5E': { name: 'Engine fuel rate', unit: 'L/h', min: 0, max: 40, dp: 1, bytes: 2, f: d => u16(d) / 20 },
+  '22': { name: 'Fuel rail pressure (relative)', unit: 'kPa', min: 0, max: 5000, dp: 0, bytes: 2, f: d => u16(d) * 0.079 },
+  '23': { name: 'Fuel rail pressure', unit: 'kPa', min: 0, max: 200000, dp: 0, bytes: 2, f: d => u16(d) * 10 },
+  ...o2Lambda('24', 'O2 sensor $ lambda'),
+  '2C': { name: 'Commanded EGR', unit: '%', min: 0, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 255 },
+  '2D': { name: 'EGR error', unit: '%', min: -100, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 128 - 100 },
+  '2E': { name: 'Commanded evaporative purge', unit: '%', min: 0, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 255 },
+  '30': { name: 'Warm-ups since codes cleared', unit: '', min: 0, max: 255, dp: 0, bytes: 1, f: d => d[0] },
+  '32': { name: 'Evap system vapour pressure', unit: 'Pa', min: -8192, max: 8192, dp: 0, bytes: 2, f: d => s16(d) / 4 },
+  ...o2Lambda('34', 'O2 sensor $ lambda (current)'),
+  '3C': { name: 'Catalyst temperature B1 S1', unit: '°C', min: 0, max: 1000, dp: 0, bytes: 2, f: d => u16(d) / 10 - 40 },
+  '3D': { name: 'Catalyst temperature B2 S1', unit: '°C', min: 0, max: 1000, dp: 0, bytes: 2, f: d => u16(d) / 10 - 40 },
+  '3E': { name: 'Catalyst temperature B1 S2', unit: '°C', min: 0, max: 1000, dp: 0, bytes: 2, f: d => u16(d) / 10 - 40 },
+  '3F': { name: 'Catalyst temperature B2 S2', unit: '°C', min: 0, max: 1000, dp: 0, bytes: 2, f: d => u16(d) / 10 - 40 },
+  '47': { name: 'Absolute throttle position B', unit: '%', min: 0, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 255 },
+  '48': { name: 'Absolute throttle position C', unit: '%', min: 0, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 255 },
+  '49': { name: 'Accelerator pedal position D', unit: '%', min: 0, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 255 },
+  '4A': { name: 'Accelerator pedal position E', unit: '%', min: 0, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 255 },
+  '4B': { name: 'Accelerator pedal position F', unit: '%', min: 0, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 255 },
+  '4C': { name: 'Commanded throttle actuator', unit: '%', min: 0, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 255 },
+  '4D': { name: 'Time run with MIL on', unit: 'min', min: 0, max: 1000, dp: 0, bytes: 2, f: d => u16(d) },
+  '4E': { name: 'Time since codes cleared', unit: 'min', min: 0, max: 10000, dp: 0, bytes: 2, f: d => u16(d) },
+  '50': { name: 'Maximum MAF air flow', unit: 'g/s', min: 0, max: 2550, dp: 0, bytes: 1, f: d => d[0] * 10 },
+  '52': { name: 'Ethanol fuel', unit: '%', min: 0, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 255 },
+  '53': { name: 'Absolute evap system vapour pressure', unit: 'kPa', min: 0, max: 330, dp: 1, bytes: 2, f: d => u16(d) / 200 },
+  '54': { name: 'Evap system vapour pressure (wide)', unit: 'Pa', min: -32768, max: 32767, dp: 0, bytes: 2, f: d => s16(d) },
+  '55': { name: 'Short term secondary O2 trim B1', unit: '%', min: -25, max: 25, dp: 1, bytes: 1, f: d => (d[0] - 128) * 100 / 128 },
+  '56': { name: 'Long term secondary O2 trim B1', unit: '%', min: -25, max: 25, dp: 1, bytes: 1, f: d => (d[0] - 128) * 100 / 128 },
+  '57': { name: 'Short term secondary O2 trim B2', unit: '%', min: -25, max: 25, dp: 1, bytes: 1, f: d => (d[0] - 128) * 100 / 128 },
+  '58': { name: 'Long term secondary O2 trim B2', unit: '%', min: -25, max: 25, dp: 1, bytes: 1, f: d => (d[0] - 128) * 100 / 128 },
+  '59': { name: 'Fuel rail absolute pressure', unit: 'kPa', min: 0, max: 200000, dp: 0, bytes: 2, f: d => u16(d) * 10 },
+  '5A': { name: 'Relative accelerator pedal position', unit: '%', min: 0, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 255 },
+  '5B': { name: 'Hybrid battery remaining', unit: '%', min: 0, max: 100, dp: 0, bytes: 1, f: d => d[0] * 100 / 255 },
+  '5D': { name: 'Fuel injection timing', unit: '°', min: -210, max: 302, dp: 1, bytes: 2, f: d => u16(d) / 128 - 210 },
+  '61': { name: "Driver's demand torque", unit: '%', min: -125, max: 130, dp: 0, bytes: 1, f: d => d[0] - 125 },
+  '62': { name: 'Actual engine torque', unit: '%', min: -125, max: 130, dp: 0, bytes: 1, f: d => d[0] - 125 },
+  '63': { name: 'Engine reference torque', unit: 'Nm', min: 0, max: 1000, dp: 0, bytes: 2, f: d => u16(d) },
+  '8E': { name: 'Engine friction torque', unit: '%', min: -125, max: 130, dp: 0, bytes: 1, f: d => d[0] - 125 },
+  '9E': { name: 'Exhaust gas flow rate', unit: 'kg/h', min: 0, max: 1000, dp: 0, bytes: 2, f: d => u16(d) / 5 },
+  'A2': { name: 'Cylinder fuel rate', unit: 'mg/stroke', min: 0, max: 100, dp: 1, bytes: 2, f: d => u16(d) / 32 },
   'A6': { name: 'Odometer', unit: 'km', min: 0, max: 400000, dp: 0, bytes: 4, f: d => (u16(d) * 65536 + u16(d.slice(2))) / 10 },
 };
+
+// Mode 01 PIDs that report a state, not a number: shown as text on the All sensors screen, never as a gauge.
+const FUEL_SYSTEM = { 1: 'Open loop (engine cold)', 2: 'Closed loop', 4: 'Open loop (load or deceleration)', 8: 'Open loop (system fault)', 16: 'Closed loop (sensor fault)' };
+const OBD_STANDARD = ['', 'OBD-II (California)', 'OBD (EPA)', 'OBD and OBD-II', 'OBD-I', 'Not OBD compliant', 'EOBD (Europe)', 'EOBD and OBD-II',
+  'EOBD and OBD', 'EOBD, OBD and OBD-II', 'JOBD (Japan)', 'JOBD and OBD-II', 'JOBD and EOBD', 'JOBD, EOBD and OBD-II'];
+const FUEL_TYPE = ['Not available', 'Petrol', 'Methanol', 'Ethanol', 'Diesel', 'LPG', 'CNG', 'Propane', 'Electric', 'Bi-fuel petrol', 'Bi-fuel methanol',
+  'Bi-fuel ethanol', 'Bi-fuel LPG', 'Bi-fuel CNG', 'Bi-fuel propane', 'Bi-fuel electric', 'Bi-fuel electric and combustion', 'Hybrid petrol', 'Hybrid ethanol',
+  'Hybrid diesel', 'Hybrid electric', 'Hybrid electric and combustion', 'Hybrid regenerative', 'Bi-fuel diesel'];
+const AIR_STATUS = { 1: 'Upstream', 2: 'Downstream of catalyst', 4: 'From outside or off', 8: 'Pump on for diagnosis' };
+const sensorsPresent = (bits, banks) => { // 13: 2 banks of 4 sensors, 1D: 4 banks of 2
+  const per = 8 / banks, out = [];
+  for (let b = 0; b < banks; b++) {
+    const s = [];
+    for (let i = 0; i < per; i++) if (bits & (1 << (b * per + i))) s.push('S' + (i + 1));
+    if (s.length) out.push('B' + (b + 1) + ': ' + s.join(' '));
+  }
+  return out.join(' · ') || '—';
+};
+// f returns text pieces: the 1st, 3rd… are translated, the 2nd, 4th… (numbers, codes) are added as they are.
+export const STATUS_PIDS = {
+  '01': { name: 'Check engine light and codes', bytes: 4, f: d => [d[0] & 0x80 ? 'Light on' : 'Light off', ' · ' + (d[0] & 0x7f) + ' ', 'codes'] },
+  '03': { name: 'Fuel system status', bytes: 1, f: d => [FUEL_SYSTEM[d[0]] ?? 'Unknown'] },
+  '12': { name: 'Secondary air status', bytes: 1, f: d => [AIR_STATUS[d[0]] ?? 'Unknown'] },
+  '13': { name: 'O2 sensors present', bytes: 1, f: d => ['', sensorsPresent(d[0], 2)] },
+  '1C': { name: 'OBD standard', bytes: 1, f: d => [OBD_STANDARD[d[0]] || 'Unknown'] },
+  '1D': { name: 'O2 sensors present', bytes: 1, f: d => ['', sensorsPresent(d[0], 4)] },
+  '1E': { name: 'Power take-off', bytes: 1, f: d => [d[0] & 1 ? 'Active' : 'Inactive'] },
+  '51': { name: 'Fuel type', bytes: 1, f: d => [FUEL_TYPE[d[0]] ?? 'Unknown'] },
+};
+// The "supported PIDs" requests themselves (00, 20, 40…) are not sensors.
+export const isBitmapPid = n => n % 0x20 === 0;
 
 // Integer-like keys ('10', '21'…) would otherwise iterate before '04', so keep an explicit hex order.
 export const PID_KEYS = Object.keys(PIDS).sort((a, b) => parseInt(a, 16) - parseInt(b, 16));
@@ -58,11 +142,28 @@ export function encodeDTC(code) {
   return [('PCBU'.indexOf(code[0]) << 6) | (n >> 8), n & 255];
 }
 
+// Mode 01 PID 01: A = MIL + confirmed code count, B/C/D = readiness monitors.
+export function decodeReadiness([A, B, C, D]) {
+  const diesel = !!(B & 8);
+  const monitors = MON_CONTINUOUS.map((name, i) => ({ name, supported: !!(B & (1 << i)), complete: !(B & (1 << (i + 4))) }));
+  (diesel ? MON_DIESEL : MON_SPARK).forEach((name, i) => {
+    if (name) monitors.push({ name, supported: !!(C & (1 << i)), complete: !(D & (1 << i)) });
+  });
+  return { mil: !!(A & 0x80), count: A & 0x7f, diesel, monitors };
+}
+
 export const OBD = {
   async pid(elm, pid) {
     const p = parseInt(pid, 16);
     const m = ELM327.messages(await elm.send('01' + pid)).find(m => m[0] === 0x41 && m[1] === p);
     return m ? m.slice(2) : null;
+  },
+
+  // A sensor with no number formula: its state as text (STATUS_PIDS), or else its raw bytes in hex.
+  async text(elm, pid) {
+    const d = await OBD.pid(elm, pid), def = STATUS_PIDS[pid];
+    if (!d) return null;
+    return def && d.length >= def.bytes ? def.f(d) : ['', d.map(hex2).join(' ')];
   },
 
   async value(elm, pid) {
@@ -74,26 +175,86 @@ export const OBD = {
   async bitmap(elm, mode, respSid) {
     const set = new Set();
     for (let base = 0; base <= 0xE0; base += 0x20) {
-      const m = ELM327.messages(await elm.send(mode + hex2(base))).find(m => m[0] === respSid && m[1] === base);
-      if (!m) break;
-      for (let i = 0; i < 32; i++) if (m[2 + (i >> 3)] & (0x80 >> (i & 7))) set.add(base + i + 1);
+      // Several modules can answer (on a BMW E60, the engine and the gearbox): merge all their bitmaps, or the
+      // engine's PIDs (MAF, coolant…) are missed when the gearbox answers first.
+      const ms = ELM327.messages(await elm.send(mode + hex2(base))).filter(m => m[0] === respSid && m[1] === base);
+      if (!ms.length) break;
+      for (const m of ms) for (let i = 0; i < 32; i++) if (m[2 + (i >> 3)] & (0x80 >> (i & 7))) set.add(base + i + 1);
       if (!set.has(base + 0x20)) break;
     }
     return set;
   },
 
-  async dtcs(elm, mode) {
-    const sid = parseInt(mode, 16) + 0x40, out = [];
-    for (const m of ELM327.messages(await elm.send(mode, 8000))) {
-      if (m[0] !== sid) continue;
-      const d = m.slice(elm.isCAN ? 2 : 1);
-      for (let i = 0; i + 1 < d.length; i += 2) if (d[i] || d[i + 1]) out.push(decodeDTC(d[i], d[i + 1]));
+  // Asks every module for its supported Mode 01 PIDs (diag mode: headers on so the answers can be told apart, long
+  // wait so slow modules get to answer). Returns { ecu: Set of PIDs } keyed by the sender's address.
+  // Leaves the adapter in diag mode: the caller switches back.
+  async ecuBitmaps(elm) {
+    const by = {};
+    await elm.setMode('diag');
+    for (let base = 0; base <= 0xE0; base += 0x20) {
+      let any = false;
+      for (const r of ELM327.records(await elm.send('01' + hex2(base), 15000), elm.protocolNumber)) {
+        if (r.data[0] !== 0x41 || r.data[1] !== base) continue;
+        const set = (by[r.ecu] ??= new Set());
+        for (let i = 0; i < 32; i++) if (r.data[2 + (i >> 3)] & (0x80 >> (i & 7))) set.add(base + i + 1);
+        any = true;
+      }
+      if (!any || !Object.values(by).some(s => s.has(base + 0x20))) break;
     }
-    return [...new Set(out)];
+    return by;
   },
 
+  // Picks the module that reports the most of the signals the app's metrics need (normally the engine ECU or the
+  // gateway); on CAN, live mode then listens only to it. Falls back to every module's list merged.
+  // Leaves the adapter in live mode.
+  async pickEcu(elm, important) {
+    let by = {};
+    try { by = await OBD.ecuBitmaps(elm); } catch (e) { elm.log('!', 'module scan failed: ' + (e?.message ?? e)); }
+    const score = s => important.filter(k => s.has(parseInt(k, 16))).length;
+    const ranked = Object.entries(by).sort(([, a], [, b]) => score(b) - score(a) || b.size - a.size);
+    elm.filter = elm.isCAN && ranked.length > 1 ? ranked[0][0] : null;
+    await elm.setMode('live');
+    if (!ranked.length) return { ecu: null, supported: await OBD.bitmap(elm, '01', 0x41), ecus: {}, modules: {} };
+    const [ecu, supported] = ranked[0];
+    // modules: every module that answered and the Mode 01 PIDs it supports, for the module list on All sensors.
+    return { ecu, supported, ecus: Object.fromEntries(ranked.map(([e, s]) => [e, score(s)])),
+      modules: Object.fromEntries(ranked.map(([e, s]) => [e, [...s].filter(n => !isBitmapPid(n)).sort((a, b) => a - b)])) };
+  },
+
+  // ---------- diag mode requests: every module answers, results are kept per module ----------
+
+  // Mode 03 (stored), 07 (pending) or 0A (permanent) from every module.
+  // answered: at least one module gave a real answer (43 00 = "no codes" counts; NO DATA does not).
+  // ecus: { '7E8': ['P0616', ...] }. refused: modules that sent a negative response. errors: adapter error lines.
+  async dtcs(elm, mode) {
+    const req = parseInt(mode, 16), sid = req + 0x40, raw = await elm.send(mode, 15000);
+    const ecus = {}, refused = [];
+    for (const r of ELM327.records(raw, elm.protocolNumber)) {
+      if (r.data[0] === 0x7F && r.data[1] === req) { if (r.data[2] !== 0x78) refused.push(r.ecu); continue; } // 78 = "wait"
+      if (r.data[0] !== sid) continue;
+      const list = (ecus[r.ecu] ??= []);
+      const d = r.data.slice(elm.isCAN ? 2 : 1); // CAN answers start with the number of codes
+      for (let i = 0; i + 1 < d.length; i += 2) {
+        const code = (d[i] || d[i + 1]) && decodeDTC(d[i], d[i + 1]);
+        if (code && !list.includes(code)) list.push(code);
+      }
+    }
+    return { answered: Object.keys(ecus).length > 0, ecus, refused, errors: ELM327.errors(raw) };
+  },
+
+  // Mode 04 goes to every module. Returns the modules that confirmed.
   async clear(elm) {
-    return ELM327.lines(await elm.send('04', 10000)).some(l => l.startsWith('44'));
+    const raw = await elm.send('04', 15000);
+    return { ecus: ELM327.records(raw, elm.protocolNumber).filter(r => r.data[0] === 0x44).map(r => r.ecu), errors: ELM327.errors(raw) };
+  },
+
+  // Mode 01 PID 01 from every module: MIL, number of confirmed codes, readiness monitors. { ecu: readiness }
+  async readinessByEcu(elm) {
+    const out = {};
+    for (const r of ELM327.records(await elm.send('0101', 15000), elm.protocolNumber)) {
+      if (r.data[0] === 0x41 && r.data[1] === 0x01 && r.data.length >= 6) out[r.ecu] = decodeReadiness(r.data.slice(2));
+    }
+    return out;
   },
 
   async freezeFrame(elm) {
@@ -111,14 +272,7 @@ export const OBD = {
 
   async readiness(elm) {
     const d = await OBD.pid(elm, '01');
-    if (!d) return null;
-    const [A, B, C, D] = d;
-    const diesel = !!(B & 8);
-    const monitors = MON_CONTINUOUS.map((name, i) => ({ name, supported: !!(B & (1 << i)), complete: !(B & (1 << (i + 4))) }));
-    (diesel ? MON_DIESEL : MON_SPARK).forEach((name, i) => {
-      if (name) monitors.push({ name, supported: !!(C & (1 << i)), complete: !(D & (1 << i)) });
-    });
-    return { mil: !!(A & 0x80), count: A & 0x7f, diesel, monitors };
+    return d && d.length >= 4 ? decodeReadiness(d) : null;
   },
 
   async info(elm, pid) {
@@ -146,3 +300,12 @@ export const OBD = {
   },
 
 };
+
+// The usual role of a module, from the address it answers from (ISO 15765-4 and SAE J2178 conventions). Only the
+// engine and the gearbox have fixed addresses; anything else is just "another module".
+export function moduleRole(addr) {
+  const a = String(addr).toUpperCase();
+  if (a.length === 3) return a === '7E8' ? 'Engine' : a === '7E9' ? 'Gearbox' : 'Other module'; // CAN 11-bit
+  const n = parseInt(a.slice(-2), 16); // CAN 29-bit (18DAF1xx) or K-line / J1850 (one byte)
+  return n >= 0x10 && n <= 0x17 ? 'Engine' : n >= 0x18 && n <= 0x1f ? 'Gearbox' : 'Other module';
+}

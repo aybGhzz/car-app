@@ -43,14 +43,16 @@ export function VehicleSwitcher() {
   const live = S.status === 'connected' && S.vehicle && S.vehicle !== cur.id ? list.find(v => v.id === S.vehicle) : null;
   return (
     <View className="mb-3 -mx-4">
-      <ScrollView ref={scroller} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16 }}>
+      <ScrollView ref={scroller} horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}
+        contentContainerStyle={{ paddingHorizontal: 16, alignItems: 'stretch' }}>
         {list.map(v => <Chip key={v.id} v={v} on={v.id === cur.id} onX={x => {
           const first = xs.current[v.id] == null;
           xs.current[v.id] = x;
           if (first && v.id === cur.id) scroller.current?.scrollTo({ x: Math.max(0, x - 40), animated: false });
         }} />)}
-        <Pressable onPress={() => router.push('/cars')}>
-          <View className="flex-row items-center rounded-2xl border border-dashed border-line px-4 py-2" style={{ height: '100%' }}>
+        {/* No height: '100%' here: on Android it resolves against the screen and the tile filled the whole page. */}
+        <Pressable onPress={() => router.push('/cars')} style={{ alignSelf: 'stretch' }}>
+          <View className="flex-row items-center rounded-2xl border border-dashed border-line px-4 py-2" style={{ flex: 1 }}>
             <Ionicons name="car-sport-outline" size={18} color={C.accent} />
             <Text className="ml-1.5 text-sm font-bold text-accent">{t('My cars')}</Text>
           </View>
