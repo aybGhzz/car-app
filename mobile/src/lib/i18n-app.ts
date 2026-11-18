@@ -151,8 +151,34 @@ export const APP_STRINGS: [string, string, string][] = [
   ['Google sign-in is not set up yet.', 'La connexion Google n’est pas encore configurée.', 'El inicio de sesión con Google aún no está configurado.'],
   ['Google did not return a sign-in token.', 'Google n’a pas renvoyé de jeton de connexion.', 'Google no devolvió un token de inicio de sesión.'],
   ['Google Play services are needed for Google sign-in.', 'Les services Google Play sont nécessaires pour la connexion Google.', 'Se necesitan los servicios de Google Play para iniciar sesión con Google.'],
+  // adapter modes, trouble codes per module, adapter log
+  ['Live', 'Direct', 'En vivo'],
+  ['Diag', 'Diag', 'Diag'],
+  ['Live mode', 'Mode direct', 'Modo en vivo'],
+  ['Diagnostic mode', 'Mode diagnostic', 'Modo diagnóstico'],
+  ['Transmission', 'Boîte de vitesses', 'Transmisión'],
+  ['Module', 'Module', 'Módulo'],
+  ['Modules read:', 'Modules lus :', 'Módulos leídos:'],
+  ['Refused the request:', 'Ont refusé la demande :', 'Rechazaron la solicitud:'],
+  ['No module answered the pending codes request.', "Aucun module n'a répondu à la demande de codes en attente.", 'Ningún módulo respondió a la solicitud de códigos pendientes.'],
+  ['No module answered the permanent codes request (older cars do not support it).', "Aucun module n'a répondu à la demande de codes permanents (les voitures anciennes ne la gèrent pas).", 'Ningún módulo respondió a la solicitud de códigos permanentes (los coches antiguos no la admiten).'],
+  ['Share the adapter log', "Partager le journal de l'adaptateur", 'Compartir el registro del adaptador'],
+  ['Adapter log', "Journal de l'adaptateur", 'Registro del adaptador'],
+  ['Every command sent to the adapter and its answer, since the app started', "Chaque commande envoyée à l'adaptateur et sa réponse, depuis le démarrage de l'app", 'Cada comando enviado al adaptador y su respuesta, desde que se abrió la app'],
+  ['Last trouble code read', 'Dernière lecture des codes défaut', 'Última lectura de códigos de avería'],
+  ['None yet', 'Aucune pour le moment', 'Ninguna todavía'],
+  ['Share', 'Partager', 'Compartir'],
+  ['The log is empty.', 'Le journal est vide.', 'El registro está vacío.'],
 ];
 
 export const APP_PATTERNS: [RegExp, Record<string, (...a: string[]) => string>][] = [
   [/^(\d+) code\(s\) found$/, { fr: (_, n) => `${n} code(s) trouvé(s)`, es: (_, n) => `${n} código(s) encontrado(s)` }],
+  [/^(\d+) code\(s\) reported, (\d+) read$/, {
+    fr: (_, n, r) => `${n} code(s) signalé(s), ${r} lu(s)`,
+    es: (_, n, r) => `${n} código(s) señalado(s), ${r} leído(s)`,
+  }],
+  [/^The car did not answer the trouble code request \((.*)\)\. This does not mean there are no codes: check that the ignition is on and read again\.$/, {
+    fr: (_, why) => `La voiture n'a pas répondu à la demande de codes défaut (${why}). Cela ne veut pas dire qu'il n'y a aucun code : vérifiez que le contact est mis et relancez la lecture.`,
+    es: (_, why) => `El coche no respondió a la solicitud de códigos de avería (${why}). Esto no significa que no haya códigos: compruebe que el contacto está puesto y vuelva a leer.`,
+  }],
 ];

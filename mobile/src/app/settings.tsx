@@ -19,6 +19,7 @@ import { DotsLoader } from '../components/Loaders';
 import { C } from '../lib/theme';
 import Constants from 'expo-constants';
 import { useLive } from '../lib/live';
+import { lastDiagLog, shareAdapterLog } from '../lib/adapterLog';
 
 function Group({ title, scope, icon, children }: { title: string; scope: 'car' | 'app'; icon: any; children: ReactNode }) {
   return (
@@ -201,6 +202,7 @@ function About() {
   const built = typeof extra.builtAt === 'string' ? Date.parse(extra.builtAt) : null;
   const val = (v: string) => <Text className="max-w-[60%] text-right font-semibold text-text" numberOfLines={2}>{v}</Text>;
   const elm = S.status === 'connected' ? (S as any).elm : null;
+  const diag = lastDiagLog();
   return (
     <>
       <Card className="py-1">
@@ -209,6 +211,14 @@ function About() {
         <Row label="Platform">{val(Platform.OS === 'web' ? 'Web' : `${Platform.OS === 'ios' ? 'iOS' : 'Android'} ${Platform.Version}`)}</Row>
         <Row label="Package">{val(cfg?.android?.package ?? cfg?.ios?.bundleIdentifier ?? '—')}</Row>
         <Row label="Adapter" sub={elm ? S.message : undefined} last>{val(elm ? (elm.version || 'ELM327') : t('Not connected'))}</Row>
+      </Card>
+      <Card className="mt-2.5 py-1">
+        <Row label="Adapter log" sub="Every command sent to the adapter and its answer, since the app started">
+          <Button title="Share" onPress={() => shareAdapterLog('all').catch(() => {})} />
+        </Row>
+        <Row label="Last trouble code read" sub={diag ? `${fmtDate(diag.at)}, ${fmtTime(diag.at)}` : t('None yet')} last>
+          <Button title="Share" disabled={!diag} onPress={() => shareAdapterLog('diag').catch(() => {})} />
+        </Row>
       </Card>
       <Card className="mt-2.5 py-1">
         <Row label="Web version" last>{val('—')}</Row>

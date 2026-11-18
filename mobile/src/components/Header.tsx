@@ -8,7 +8,7 @@ import { Text, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { useEffect } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLive } from '../lib/live';
+import { useLive, type Mode } from '../lib/live';
 import { t, useLang } from '../lib/i18n';
 import { C } from '../lib/theme';
 import { ConnectSheet } from './ConnectSheet';
@@ -49,9 +49,21 @@ export function Header({ title, subtitle }: { title: string; subtitle?: string }
       <PressableScale onPress={() => setConnOpen(true)} className="h-10 flex-row items-center rounded-full border border-line bg-panel px-3.5">
         {S.status === 'connecting' ? <View style={{ marginRight: 8 }}><RingLoader size={14} stroke={2} /></View> : <PulseDot color={color} pulse={S.status === 'connected'} />}
         <Text className="text-sm font-semibold text-text">{t(label)}</Text>
+        {S.status === 'connected' && S.mode ? <ModeTag mode={S.mode} /> : null}
       </PressableScale>
       {S.status === 'connecting' ? <View pointerEvents="none" style={{ position: 'absolute', left: 16, right: 16, bottom: 2, alignItems: 'center' }}><LineLoader width={220} /></View> : null}
       <ConnectSheet open={connOpen} onClose={() => setConnOpen(false)} />
+    </View>
+  );
+}
+
+// The adapter's mode, switched by the app (live data vs reading every module for codes). Display only.
+function ModeTag({ mode }: { mode: Mode }) {
+  const color = mode === 'diag' ? C.violet : C.accent;
+  return (
+    <View accessibilityLabel={t(mode === 'diag' ? 'Diagnostic mode' : 'Live mode')} style={{ backgroundColor: color + '22', borderColor: color + '66' }}
+      className="ml-2 rounded-full border px-1.5 py-0.5">
+      <Text style={{ color }} className="text-[10px] font-extrabold uppercase">{t(mode === 'diag' ? 'Diag' : 'Live')}</Text>
     </View>
   );
 }

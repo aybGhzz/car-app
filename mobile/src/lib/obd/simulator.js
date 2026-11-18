@@ -9,9 +9,12 @@ export class SimTransport {
     this.onData = () => {};
     this.start = performance.now();
     this.reset();
-    this.stored = ['P0301', 'P0420'];
+    // Three engine codes make a multi-frame CAN answer. P0616 (starter relay) is also stored in the gearbox: the
+    // same code in two modules, as Car Scanner showed on a real car.
+    this.stored = ['P0301', 'P0420', 'P0616'];
     this.pending = ['P0171'];
     this.permanent = ['P0420'];
+    this.gearbox = { stored: ['P0616'], pending: [], permanent: [] };
     this.clearedAt = null;
     this.freeze = { ...this.state(0), rpm: 2450, speed: 72, coolant: 88, load: 64, iat: 31, maf: 28.4, throttle: 34, stft: -6.2, ltft: 3.1, map: 68, timing: 18 };
   }
@@ -104,6 +107,7 @@ export class SimTransport {
       if (/^S[01]$/.test(c)) this.spaces = c === 'S1';
       if (/^H[01]$/.test(c)) this.headers = c === 'H1';
       if (c.startsWith('CRA')) this.cra = c.slice(3) || null;
+      if (c === 'AR') this.cra = null;
       if (c.startsWith('SP')) this.searching = true;
       if (c === 'DPN') return 'A6';
       if (c === 'DP') return 'AUTO, ISO 15765-4 (CAN 11/500)';
@@ -113,48 +117,73 @@ export class SimTransport {
     if (!/^([0-9A-F]{2})+$/.test(cmd)) return '?';
     const prefix = this.searching ? 'SEARCHING...\r' : '';
     this.searching = false;
+    return prefix + this.format(this.answers(cmd));
+  }
+
+  // Every module's answer to a request: [[CAN ID, bytes], ...]. The engine is 7E8. A second module (the gearbox,
+  // 7E9) answers first, with a short PID list, its own readiness and its own stored code, like on some real cars:
+  // its code only shows when every module is read (diag mode), not through live mode's filter on the engine.
+  answers(cmd) {
     const mode = cmd.slice(0, 2), pid = cmd.slice(2, 4), n = parseInt(pid, 16);
-    const nodata = prefix + 'NO DATA';
+    const E = '7E8', G = '7E9', out = [];
+    const gb = this.gearbox;
     switch (mode) {
       case '01': {
+        if (pid === '00') out.push([G, [0x41, 0, ...this.bitmap([0x01, 0x0C, 0x0D], 0)]]);
+        else if (pid === '01') out.push([G, [0x41, 1, (gb.stored.length ? 0x80 : 0) | gb.stored.length, 0, 0, 0]]);
+        else if (pid === '0C' || pid === '0D') out.push([G, [0x41, n, ...this.encode(pid, this.state())]]);
         const d = this.encode(pid, this.state());
-        if (!d) return nodata;
-        if (!this.headers) return prefix + this.fmt([0x41, n, ...d]);
-        // With headers on, a second module (the gearbox, 7E9) answers the supported-PID requests first with a short
-        // list, like on some real cars. The engine is 7E8.
-        const line = (id, b) => (this.cra && this.cra !== id ? null : id + (this.spaces ? ' ' : '') + this.fmt([b.length, ...b]));
-        const out = [];
-        const base = ['00', '20', '40', '60', '80', 'A0'].indexOf(pid);
-        if (base >= 0 && base <= 2) out.push(line('7E9', [0x41, n, ...this.bitmap([0x0C, 0x0D, 0x42], base * 0x20)]));
-        out.push(line('7E8', [0x41, n, ...d]));
-        return prefix + out.filter(Boolean).join('\r');
+        if (d) out.push([E, [0x41, n, ...d]]);
+        break;
       }
       case '02': {
-        if (!this.stored.length) return nodata;
-        if (pid === '02') return this.fmt([0x42, 0x02, 0x00, ...encodeDTC(this.stored[0])]);
+        if (!this.stored.length) break;
+        if (pid === '02') { out.push([E, [0x42, 0x02, 0x00, ...encodeDTC(this.stored[0])]]); break; }
         const d = pid === '01' ? null : this.encode(pid, this.freeze);
-        return d && !['00', '20', '40', '60', '80', 'A0', 'A6'].includes(pid) ? this.fmt([0x42, n, 0x00, ...d]) : nodata;
+        if (d && !['00', '20', '40', '60', '80', 'A0', 'A6'].includes(pid)) out.push([E, [0x42, n, 0x00, ...d]]);
+        break;
       }
       case '03': case '07': case '0A': {
-        const list = { '03': this.stored, '07': this.pending, '0A': this.permanent }[mode];
-        return prefix + this.frames([parseInt(mode, 16) + 0x40, list.length, ...list.flatMap(encodeDTC)]);
+        const sid = parseInt(mode, 16) + 0x40, key = { '03': 'stored', '07': 'pending', '0A': 'permanent' }[mode];
+        out.push([G, [sid, gb[key].length, ...gb[key].flatMap(encodeDTC)]]);
+        out.push([E, [sid, this[key].length, ...this[key].flatMap(encodeDTC)]]);
+        break;
       }
       case '04':
         this.stored = []; this.pending = [];
+        gb.stored = []; gb.pending = [];
         this.clearedAt = (performance.now() - this.start) / 1000;
-        return '44';
-      case '06': return this.mode06(n) || nodata;
+        out.push([G, [0x44]], [E, [0x44]]);
+        break;
+      case '06': { const d = this.mode06(n); if (d) out.push([E, d]); break; }
       case '09': {
         const ascii = s => [...s].map(c => c.charCodeAt(0));
         const vals = { '02': ascii('1HGCM82633A004352'), '04': ascii('SIM-CAL-0042'.padEnd(16, '\0')), '0A': ascii('ECM-EngineControl'.padEnd(20, '\0')) };
-        if (pid === '00') return this.fmt([0x49, 0x00, 0x54, 0x40, 0x00, 0x00]);
-        return vals[pid] ? this.frames([0x49, n, 0x01, ...vals[pid]]) : nodata;
+        if (pid === '00') out.push([E, [0x49, 0x00, 0x54, 0x40, 0x00, 0x00]]);
+        else if (vals[pid]) out.push([E, [0x49, n, 0x01, ...vals[pid]]]);
+        break;
       }
       case '22': // manufacturer PID used by the sample custom PID
-        if (cmd === '221310') return this.fmt([0x62, 0x13, 0x10, Math.round(this.state().trans + 40)]);
-        return this.fmt([0x7F, 0x22, 0x31]);
-      default: return nodata;
+        out.push([E, cmd === '221310' ? [0x62, 0x13, 0x10, Math.round(this.state().trans + 40)] : [0x7F, 0x22, 0x31]]);
+        break;
     }
+    return out;
+  }
+
+  // Prints the answers as an ELM327 would: only the modules the receive filter (ATCRA) lets through; with headers
+  // off, ISO-TP output as "0:", "1:" lines; with headers on, raw CAN frames (ID, PCI byte, data padded to 8 bytes).
+  format(answers) {
+    const heard = answers.filter(([id]) => !this.cra || this.cra === id);
+    if (!heard.length) return 'NO DATA';
+    const sp = this.spaces ? ' ' : '';
+    const pad = a => { while (a.length < 8) a.push(0x55); return a; };
+    return heard.map(([id, b]) => {
+      if (!this.headers) return this.frames(b);
+      if (b.length <= 7) return id + sp + this.fmt(pad([b.length, ...b]));
+      const lines = [id + sp + this.fmt([0x10 | (b.length >> 8), b.length & 255, ...b.slice(0, 6)])];
+      for (let i = 6, k = 1; i < b.length; i += 7, k++) lines.push(id + sp + this.fmt(pad([0x20 | (k & 15), ...b.slice(i, i + 7)])));
+      return lines.join('\r');
+    }).join('\r');
   }
 
   mode06(mid) {
@@ -164,11 +193,10 @@ export class SimTransport {
       0x21: [[0x80, 0x01, 812, 0, 610]],
       0xA2: [[0x0B, 0x24, 41, 0, 15]], 0xA3: [[0x0B, 0x24, 0, 0, 15]],
     };
-    if (mid === 0x00) return this.fmt([0x46, 0x00, ...this.bitmap(Object.keys(tests).map(Number), 0x00)]);
-    if (mid % 0x20 === 0) return this.fmt([0x46, mid, ...this.bitmap(Object.keys(tests).map(Number), mid)]);
+    if (mid % 0x20 === 0) return [0x46, mid, ...this.bitmap(Object.keys(tests).map(Number), mid)];
     const t = tests[mid];
     if (!t) return null;
     const w = v => [v >> 8, v & 255];
-    return this.frames([0x46, ...t.flatMap(([tid, uas, v, lo, hi]) => [mid, tid, uas, ...w(v), ...w(lo), ...w(hi)])]);
+    return [0x46, ...t.flatMap(([tid, uas, v, lo, hi]) => [mid, tid, uas, ...w(v), ...w(lo), ...w(hi)])];
   }
 }
