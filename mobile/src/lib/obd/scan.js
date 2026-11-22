@@ -21,10 +21,13 @@ export async function scanModules(elm, { make, onProgress } = {}) {
   const p = elm.protocolNumber;
   if (!canScan(p)) return [];
   const found = new Map(); // ecu -> req
+  const seen = new Map(); // CAN 11 bit: ecu -> every request ID it seemed to answer
   const step = (i, n) => onProgress?.({ done: i, total: n, found: found.size });
   await elm.setMode('diag');
   try {
-    await elm.send('ATST19'); // 25 x 4 ms = 100 ms: a module answers tester present within 50 ms (P2max)
+    // 25 x 4 ms = 100 ms: a module answers tester present within 50 ms (P2max). Some adapters (cheap v1.5 clones)
+    // are slower, so CAN 11 bit waits 200 ms and every module found is checked again below.
+    await elm.send(p === 6 || p === 8 ? 'ATST32' : 'ATST19');
     if (p === 6 || p === 8) {
       await elm.send('ATCF700');
       await elm.send('ATCM700');
@@ -33,6 +36,20 @@ export async function scanModules(elm, { make, onProgress } = {}) {
         await elm.send('ATSH' + req);
         take(await elm.send('3E00', 3000), req);
         step(i + 1, 0xF8);
+      }
+      // On 11 bit the answer ID does not say which request ID it answered, and a late answer (slow adapter) or a
+      // module that answers any request shows up under the wrong one: the Accent's engine was taken as asked on 700.
+      // So each module is asked again with only its own answer let through (ATCRA): first on the usual pair
+      // (answer ID - 8), then on the IDs it seemed to answer. A module that does not answer again is dropped.
+      found.clear();
+      for (const [ecu, reqs] of seen) {
+        const std = (parseInt(ecu, 16) - 8).toString(16).toUpperCase();
+        for (const r of [...new Set([std, ...reqs])].slice(0, 4)) {
+          if (parseInt(r, 16) < 0x700) continue;
+          await elm.send('ATSH' + r);
+          await elm.send('ATCRA' + ecu);
+          if (answered(await elm.send('3E00', 3000), ecu)) { found.set(ecu, r); break; }
+        }
       }
     } else if (p === 7 || p === 9) {
       await elm.send('ATCP18');
@@ -68,12 +85,15 @@ export async function scanModules(elm, { make, onProgress } = {}) {
     await elm.send('ATSTFF').catch(() => {});
   }
 
+  function isTp(d) { return d[0] === 0x7E || (d[0] === 0x7F && d[1] === 0x3E); }
   function take(raw, req) {
     for (const r of ELM327.records(raw, p)) {
-      const d = r.data;
-      if (d[0] === 0x7E || (d[0] === 0x7F && d[1] === 0x3E)) { if (!found.has(r.ecu)) found.set(r.ecu, req); }
+      if (!isTp(r.data)) continue;
+      if (!found.has(r.ecu)) found.set(r.ecu, req);
+      const l = seen.get(r.ecu) ?? []; if (!l.includes(req)) l.push(req); seen.set(r.ecu, l);
     }
   }
+  function answered(raw, ecu) { return ELM327.records(raw, p).some(r => r.ecu === ecu && isTp(r.data)); }
 }
 
 // The module's own name: UDS 22 F197 on CAN, KWP 1A 97 on K-line (the same "system name or engine type" record).
@@ -82,6 +102,7 @@ async function readName(elm, ecu, req) {
   let raw, sid, id;
   if (elm.isCAN) {
     await setCanTarget(elm, ecu, req);
+    if (ecu.length === 3) await elm.send('ATCRA' + ecu); // only this module's answer (the scan's check leaves another)
     raw = await elm.send('22F197', 3000); sid = 0x62; id = [0xF1, 0x97];
   } else {
     await elm.send('ATSH82' + req + 'F1');
