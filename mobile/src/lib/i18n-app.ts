@@ -331,6 +331,11 @@ export const APP_STRINGS: [string, string, string][] = [
   ['O2 sensor 6 lambda (current)', 'Sonde O2 6 lambda (courant)', 'Sonda O2 6 lambda (corriente)'],
   ['O2 sensor 7 lambda (current)', 'Sonde O2 7 lambda (courant)', 'Sonda O2 7 lambda (corriente)'],
   ['O2 sensor 8 lambda (current)', 'Sonde O2 8 lambda (courant)', 'Sonda O2 8 lambda (corriente)'],
+  // signal plotter colours
+  ['Line colour', 'Couleur de la courbe', 'Color de la línea'],
+  ['Colour', 'Couleur', 'Color'],
+  ['The colour is remembered for this chart on every trip.', 'La couleur est gardée pour ce graphique sur tous les trajets.', 'El color se guarda para este gráfico en todos los viajes.'],
+  ["Up to 4 signals per chart, on a left and a right axis. Drag across a chart to read the values. Tap a signal's name to change its colour.", "Jusqu'à 4 signaux par graphique, sur un axe gauche et un axe droit. Glissez sur un graphique pour lire les valeurs. Touchez le nom d'un signal pour changer sa couleur.", 'Hasta 4 señales por gráfico, en un eje izquierdo y uno derecho. Deslice sobre un gráfico para leer los valores. Toque el nombre de una señal para cambiar su color.'],
 ];
 
 export const APP_PATTERNS: [RegExp, Record<string, (...a: string[]) => string>][] = [

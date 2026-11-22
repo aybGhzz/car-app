@@ -144,7 +144,9 @@ export function Swatches({ value, onChange }: { value?: string; onChange: (c: st
     <View className="flex-row flex-wrap gap-2">
       {SWATCHES.map(c => (
         <Pressable key={c} accessibilityRole="button" accessibilityLabel={c} onPress={() => onChange(c)}
-          style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: c, borderWidth: value === c ? 3 : 0, borderColor: '#fff' }} />
+          style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: c, borderWidth: value === c ? 3 : 0, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' }}>
+          {value === c ? <Ionicons name="checkmark" size={15} color="#fff" /> : null}
+        </Pressable>
       ))}
     </View>
   );

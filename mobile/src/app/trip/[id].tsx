@@ -11,7 +11,7 @@ import { Screen } from '../../components/Screen';
 import { Sheet } from '../../components/Sheet';
 import { SignalChart, type Series } from '../../components/SignalChart';
 import { TripMap } from '../../components/TripMap';
-import { Button, Card, CloudTag, DemoTag, Empty, Grid, PressableScale, Segmented, SectionTitle, StatTile, SWATCHES, T } from '../../components/ui';
+import { Button, Card, CloudTag, DemoTag, Empty, Grid, PressableScale, Segmented, SectionTitle, StatTile, Swatches, SWATCHES, T } from '../../components/ui';
 import { tripKeys, tripSeries, useFuelPrice, useTrips, withStats, type Trip, type TripWithStats } from '../../lib/garage';
 import { meta } from '../../lib/live';
 import { fmtDate, fmtTime, hm, num, t, useLang } from '../../lib/i18n';
@@ -120,6 +120,8 @@ function Plotter({ tr }: { tr: Trip }) {
   const charts = useStored<PlotChart[]>('plotter', PLOT_DEFAULT); // remembered between trips
   const [adding, setAdding] = useState<string | null>(null); // chart id
   const [axis, setAxis] = useState<'L' | 'R'>('L');
+  const [addColor, setAddColor] = useState<string | null>(null); // colour picked in the "Add a signal" sheet (null = next free one)
+  const [painting, setPainting] = useState<{ chart: string; key: string } | null>(null); // line whose colour is being changed
   const keys = tripKeys(tr);
   const save = (c: PlotChart[]) => kv.set('plotter', c);
   const update = (id: string, f: (c: PlotChart) => PlotChart) => save(charts.map(c => (c.id === id ? f(c) : c)));
@@ -137,8 +139,11 @@ function Plotter({ tr }: { tr: Trip }) {
             <View className="mb-2 flex-row flex-wrap items-center gap-1.5">
               {c.lines.map(l => (
                 <View key={l.key} style={{ borderColor: l.color + '88' }} className="flex-row items-center rounded-full border bg-panel2 py-1 pl-2.5 pr-1">
-                  <View style={{ backgroundColor: l.color }} className="mr-1.5 h-2 w-2 rounded-full" />
-                  <Text numberOfLines={1} className="max-w-[130px] text-xs font-semibold text-text">{t(meta(l.key).name)}</Text>
+                  {/* tap the dot or the name to choose the line's colour */}
+                  <PressableScale accessibilityLabel={t('Line colour')} onPress={() => setPainting({ chart: c.id, key: l.key })} className="flex-row items-center">
+                    <View style={{ backgroundColor: l.color }} className="mr-1.5 h-3.5 w-3.5 rounded-full border border-line" />
+                    <Text numberOfLines={1} className="max-w-[130px] text-xs font-semibold text-text">{t(meta(l.key).name)}</Text>
+                  </PressableScale>
                   {/* tap the axis letter to move the line to the other y-axis */}
                   <PressableScale accessibilityLabel={t('Switch axis')} onPress={() => update(c.id, x => ({ ...x, lines: x.lines.map(y => (y.key === l.key ? { ...y, axis: y.axis === 'L' ? 'R' : 'L' } : y)) }))}
                     className="ml-1.5 rounded-full bg-line px-1.5 py-0.5">
@@ -150,7 +155,7 @@ function Plotter({ tr }: { tr: Trip }) {
                 </View>
               ))}
               {c.lines.length < MAX_LINES ? (
-                <PressableScale onPress={() => { setAxis(c.lines.some(l => l.axis === 'L') ? 'R' : 'L'); setAdding(c.id); }} className="flex-row items-center rounded-full border border-dashed border-accent px-2.5 py-1">
+                <PressableScale onPress={() => { setAxis(c.lines.some(l => l.axis === 'L') ? 'R' : 'L'); setAddColor(null); setAdding(c.id); }} className="flex-row items-center rounded-full border border-dashed border-accent px-2.5 py-1">
                   <Ionicons name="add" size={14} color={C.accent} /><T className="text-xs font-semibold text-accent">Signal</T>
                 </PressableScale>
               ) : null}
@@ -165,21 +170,37 @@ function Plotter({ tr }: { tr: Trip }) {
         );
       })}
       <Button title="+ Add a chart" onPress={() => save([...charts, { id: Date.now().toString(36), lines: [{ key: keys.find(k => k === '05') ?? keys[0], axis: 'L', color: C.bad }] }])} />
-      <T className="mt-2 px-1 text-xs text-muted">Up to 4 signals per chart, on a left and a right axis. Drag across a chart to read the values.</T>
+      <T className="mt-2 px-1 text-xs text-muted">Up to 4 signals per chart, on a left and a right axis. Drag across a chart to read the values. Tap a signal's name to change its colour.</T>
 
       <Sheet open={adding != null} onClose={() => setAdding(null)} title="Add a signal">
         <T className="mb-1 text-xs text-muted">Axis</T>
         <Segmented value={axis} onChange={setAxis} options={[['L', 'Left axis'], ['R', 'Right axis']]} className="mb-3" />
+        <T className="mb-1.5 text-xs text-muted">Colour</T>
+        <View className="mb-3">{(() => { const c = charts.find(x => x.id === adding); return <Swatches value={addColor ?? (c ? nextColor(c) : undefined)} onChange={setAddColor} />; })()}</View>
         {keys.map(k => {
           const c = charts.find(x => x.id === adding), on = c?.lines.some(l => l.key === k);
           return (
-            <PressableScale key={k} disabled={on} onPress={() => { if (c) update(c.id, x => ({ ...x, lines: [...x.lines, { key: k, axis, color: nextColor(x) }] })); setAdding(null); }}
+            <PressableScale key={k} disabled={on} onPress={() => { if (c) update(c.id, x => ({ ...x, lines: [...x.lines, { key: k, axis, color: addColor ?? nextColor(x) }] })); setAdding(null); }}
               className={`mb-1.5 flex-row items-center justify-between rounded-2xl border px-4 py-3 ${on ? 'border-line opacity-40' : 'border-line bg-panel2'}`}>
               <T className="flex-1 font-semibold">{meta(k).name}</T>
               <T className="text-xs text-muted">{on ? 'Already in the chart' : meta(k).unit}</T>
             </PressableScale>
           );
         })}
+      </Sheet>
+
+      <Sheet open={painting != null} onClose={() => setPainting(null)} title="Line colour">
+        {(() => {
+          const c = charts.find(x => x.id === painting?.chart), l = c?.lines.find(y => y.key === painting?.key);
+          if (!c || !l) return null;
+          return (
+            <>
+              <T className="mb-3 font-semibold">{meta(l.key).name}</T>
+              <Swatches value={l.color} onChange={color => { update(c.id, x => ({ ...x, lines: x.lines.map(y => (y.key === l.key ? { ...y, color } : y)) })); setPainting(null); }} />
+              <T className="mt-3 text-xs text-muted">The colour is remembered for this chart on every trip.</T>
+            </>
+          );
+        })()}
       </Sheet>
     </>
   );
