@@ -9,7 +9,7 @@ import { DotsLoader } from '../../components/Loaders';
 import { VehicleSwitcher } from '../../components/VehicleSwitcher';
 import { Sheet } from '../../components/Sheet';
 import { Button, Card, Empty, Pill, PressableScale, SectionTitle, T } from '../../components/ui';
-import { clearCodes, connect, readCodes, useLive, type CodesResult, type MemoryCode, type ModuleCode } from '../../lib/live';
+import { clearCodes, connect, moduleScanSupported, readCodes, scanAllModules, scannedModules, useLive, type CodesResult, type MemoryCode, type ModuleCode } from '../../lib/live';
 import { shareAdapterLog } from '../../lib/adapterLog';
 import { useVehicle, useVehicles, type Vehicle } from '../../lib/garage';
 import { searchUrl, useSettings } from '../../lib/settings';
@@ -166,13 +166,22 @@ function SummaryRow({ icon, label, value, mono }: { icon: any; label: string; va
 export default function Codes() {
   useLang();
   const S = useLive();
-  const [busy, setBusy] = useState<'' | 'read' | 'clear'>('');
+  const [busy, setBusy] = useState<'' | 'read' | 'clear' | 'scan'>('');
+  const [scan, setScan] = useState<{ done: number; total: number; found: number } | null>(null);
   const [res, setRes] = useState<Result | null>(null);
   const [msg, setMsg] = useState('');
   const [confirm, setConfirm] = useState(false);
   const connected = S.status === 'connected';
   const vehicles = useVehicles(), selected = useVehicle();
   const car = (connected && vehicles.find(v => v.id === S.vehicle)) || selected; // the codes belong to the connected car
+
+  // Asks every module address, then reads the codes again so the new modules show with theirs.
+  async function scanAll() {
+    setBusy('scan'); setMsg(''); setScan({ done: 0, total: 1, found: 0 });
+    try { await scanAllModules(setScan); } catch (e: any) { setMsg(e?.message ?? String(e)); }
+    setScan(null); setBusy('');
+    await read();
+  }
 
   async function read() {
     setBusy('read'); setMsg('');
@@ -287,6 +296,25 @@ export default function Codes() {
           <SectionTitle>Modules</SectionTitle>
           <T className="mb-2 px-1 text-[11px] text-muted">Tap a module to see its codes. Active: the fault is present now. History: it happened before and is not present now.</T>
           {mods.map((m, i) => <EcuBox key={m.ecu} mod={m} entries={entriesOf(m.ecu)} index={i} car={car} />)}
+          {moduleScanSupported() ? (
+            <Card index={n + 1} className="mt-1">
+              {busy === 'scan' && scan ? (
+                <>
+                  <Text className="text-sm font-bold text-text">{t('Scanning every module address…')}</Text>
+                  <View className="mt-2 h-2 overflow-hidden rounded-full bg-panel2">
+                    <View style={{ width: `${Math.round(scan.done * 100 / scan.total)}%`, backgroundColor: C.accent }} className="h-2 rounded-full" />
+                  </View>
+                  <Text className="mt-1.5 text-xs text-muted">{t(`${scan.done} of ${scan.total} addresses · ${scan.found} module(s) found`)}</Text>
+                </>
+              ) : (
+                <>
+                  <T className="mb-2 text-xs text-muted">Only the engine and the gearbox answer the generic OBD-II request. A module scan asks every module address once (about a minute) and remembers what it finds for this car.</T>
+                  {scannedModules() ? <Text className="mb-2 text-[11px] text-muted">{t('Last scan:')} {new Date(scannedModules()!.at).toLocaleString()}</Text> : null}
+                  <Button title={scannedModules() ? 'Scan all modules again' : 'Scan all modules'} disabled={!!busy} onPress={scanAll} />
+                </>
+              )}
+            </Card>
+          ) : null}
 
           {res.readiness ? (
             <>

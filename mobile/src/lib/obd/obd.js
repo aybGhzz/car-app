@@ -1,4 +1,5 @@
 import { ELM327 } from './elm327';
+import { setCanTarget } from './scan';
 
 // OBD-II (SAE J1979) services on top of ELM327: PID decoding, DTCs, freeze frame, readiness, Mode 06, vehicle info.
 
@@ -285,14 +286,17 @@ export const OBD = {
   //  KWP2000 (ISO 14230-4, 5-baud or fast init, protocols 4-5): KWP 18 02 FF 00, all modules, then the silent ones.
   //  ISO 9141-2 and SAE J1850 (protocols 1-3): no standard service for this, so nothing is asked.
   // Returns { service: 'uds' | 'kwp' | null, read: [ecu], codes: [{ ecu, code, ftb?, status, active }] }.
+  // modules: addresses ('7E8'), or { ecu, req } from a module scan when the request ID is not the usual one.
   async memoryCodes(elm, modules) {
     const p = elm.protocolNumber;
+    const reqOf = Object.fromEntries(modules.map(m => typeof m === 'string' ? [m, undefined] : [m.ecu, m.req]));
+    modules = Object.keys(reqOf);
     if (p >= 6 && p <= 9) {
       const read = [], codes = [];
       try {
         for (const ecu of modules) {
           try {
-            const u = await OBD.udsCodes(elm, ecu);
+            const u = await OBD.udsCodes(elm, ecu, reqOf[ecu]);
             if (!u.answered) continue;
             read.push(ecu);
             for (const c of u.codes) codes.push({ ecu, ...c, active: udsActive(c.status) });
@@ -316,15 +320,9 @@ export const OBD = {
   // network (U) codes. Each record is 2 bytes of code (SAE J2012), a failure type byte and a status byte.
   // Returns { answered, codes: [{ code, ftb, status }], refused, errors }. Leaves the request header on that module:
   // the caller puts the default back with udsEnd.
-  async udsCodes(elm, ecu) {
+  async udsCodes(elm, ecu, req) {
     if (!elm.isCAN) return { answered: false, codes: [], refused: false, errors: [] };
-    const ext = ecu.length === 8;
-    if (ext) { // 18DAF1xx answers to 18DAxxF1: the priority byte goes through ATCP, the rest through ATSH
-      await elm.send('ATCP18');
-      await elm.send('ATSHDA' + ecu.slice(6) + 'F1');
-    } else {
-      await elm.send('ATSH' + (parseInt(ecu, 16) - 8).toString(16).toUpperCase()); // 7E8 answers to 7E0
-    }
+    await setCanTarget(elm, ecu, req); // 7E8 answers to 7E0, 18DAF1xx to 18DAxxF1, a scanned module to its own ID
     let raw = await elm.send('1902FF', 15000);
     let recs = ELM327.records(raw, elm.protocolNumber).filter(r => r.ecu === ecu);
     // 7F 19 78 = "busy, answer follows". If the adapter gave up before the answer came, ask once more.
@@ -403,6 +401,7 @@ export const OBD = {
     if (!elm.isCAN) return;
     if (elm.defaultHeader.length === 8) { await elm.send('ATCP18'); await elm.send('ATSH' + elm.defaultHeader.slice(2)); }
     else await elm.send('ATSH' + elm.defaultHeader);
+    await elm.send('ATFCSM0'); // automatic flow control again
   },
 
   // Mode 04 goes to every module. Returns the modules that confirmed.

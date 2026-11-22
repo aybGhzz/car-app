@@ -3,7 +3,8 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { PermissionsAndroid, Platform } from 'react-native';
 import { ELM327 } from './obd/elm327';
-import { OBD, PIDS, PID_KEYS, hex2, isBitmapPid, moduleRole } from './obd/obd';
+import { OBD, PIDS, PID_KEYS, hex2, isBitmapPid } from './obd/obd';
+import { addressName, canScan, scanModules } from './obd/scan';
 import { adapterLog, endDiagLog, startDiagLog } from './adapterLog';
 import { SimTransport } from './obd/simulator';
 import { BleTransport, ClassicTransport, classicReady, scanBle } from './transports/bluetooth';
@@ -506,7 +507,28 @@ export type CodesResult = {
   readiness: (Readiness & { count: number }) | null;
 };
 
-const label = (ecu: string) => ({ ecu, module: moduleRole(ecu) as string });
+// Modules found by a module scan, per car: { at, list: [{ ecu, req, name }] }.
+export type ScannedModule = { ecu: string; req: string; name: string };
+const scanKey = () => 'modules.' + S.vehicle;
+export const scannedModules = (): { at: number; list: ScannedModule[] } | null => kv.get(scanKey(), null);
+const carMake = () => (vehicleById(S.vehicle) as any)?.make as string | undefined;
+// A module's name: what it said about itself in the last scan, else the usual module at that address.
+const label = (ecu: string) => ({ ecu, module: scannedModules()?.list.find(m => m.ecu === ecu)?.name ?? (addressName(ecu, carMake()) as string) });
+
+// Asks every possible module address (see obd/scan.js) and remembers what answered for this car, so every later
+// code read also asks those modules. onProgress gets { done, total, found }.
+export async function scanAllModules(onProgress?: (p: { done: number; total: number; found: number }) => void): Promise<ScannedModule[]> {
+  startDiagLog('module scan');
+  try {
+    const list = (await exclusive('diag', elm => scanModules(elm, { make: carMake(), onProgress }))) as ScannedModule[];
+    adapterLog('#', 'modules found: ' + (list.map(m => `${m.ecu} (${m.name}, asked on ${m.req})`).join(', ') || 'none'));
+    kv.set(scanKey(), { at: Date.now(), list });
+    return list;
+  } finally {
+    endDiagLog(diagHeader('Module scan'));
+  }
+}
+export const moduleScanSupported = () => !!S.elm && canScan(S.elm.protocolNumber);
 const flat = (ecus: Record<string, string[]>): ModuleCode[] =>
   Object.keys(ecus).sort().flatMap(ecu => ecus[ecu].map(code => ({ code, ...label(ecu) })));
 
@@ -526,8 +548,10 @@ export async function readCodes(): Promise<CodesResult> {
     // Each module's own fault memory, with the service that matches the detected protocol (see OBD.memoryCodes).
     // A module that does not support it just refuses: that never hides the Mode 03 result above.
     type Mem = { service: 'uds' | 'kwp' | null; read: string[]; codes: { ecu: string; code: string; ftb?: number; status: number; active: boolean }[] };
-    const targets = [...new Set([...Object.keys(r.stored.ecus), ...Object.keys(r.ready)])].sort();
-    const m: Mem = targets.length ? (await exclusive('diag', elm => OBD.memoryCodes(elm, targets))) as Mem : { service: null, read: [], codes: [] };
+    const saved = scannedModules()?.list ?? [];
+    const targets = [...new Set([...Object.keys(r.stored.ecus), ...Object.keys(r.ready), ...saved.map(x => x.ecu)])].sort();
+    const asked = targets.map(ecu => saved.find(x => x.ecu === ecu) ?? ecu); // a scanned module is asked on its own ID
+    const m: Mem = targets.length ? (await exclusive('diag', elm => OBD.memoryCodes(elm, asked))) as Mem : { service: null, read: [], codes: [] };
     const memoryRead = m.read.map(label);
     const memory: MemoryCode[] = m.service ? m.codes.map(c => ({ ...c, ...label(c.ecu), kind: m.service! })) : [];
     memory.sort((a, b) => Number(b.active) - Number(a.active) || a.ecu.localeCompare(b.ecu) || a.code.localeCompare(b.code));
