@@ -20,7 +20,13 @@ export class SimTransport {
     this.memory = {
       '7E8': [['P0301', 0x00, 0x2F], ['P0562', 0x16, 0x28], ['P068A', 0x00, 0x68], ['U0167', 0x00, 0x28]],
       '7E9': [['P0616', 0x13, 0x29]],
+      '7B8': [['C0035', 0x00, 0x28]],
+      '77E': [],
     };
+    // Every module on the bus, by the request ID it listens to: answer ID and the name it gives (UDS 22 F197).
+    // 7B0/7B8 is the usual +8 pair; 714/77E pairs IDs differently, as some makers do. Only 7E0/7E1 answer the
+    // generic OBD-II address (7DF), the others are found by a module scan.
+    this.modules = { '7E0': ['7E8', 'ECM'], '7E1': ['7E9', 'TCM'], '7B0': ['7B8', 'ABS ESP'], '714': ['77E', 'KOMBI'] };
     this.clearedAt = null;
     this.freeze = { ...this.state(0), rpm: 2450, speed: 72, coolant: 88, load: 64, iat: 31, maf: 28.4, throttle: 34, stft: -6.2, ltft: 3.1, map: 68, timing: 18 };
   }
@@ -161,7 +167,7 @@ export class SimTransport {
       }
       case '04':
         this.stored = []; this.pending = [];
-        this.memory = { '7E8': [], '7E9': [] };
+        this.memory = { '7E8': [], '7E9': [], '7B8': [], '77E': [] };
         gb.stored = []; gb.pending = [];
         this.clearedAt = (performance.now() - this.start) / 1000;
         out.push([G, [0x44]], [E, [0x44]]);
@@ -174,8 +180,20 @@ export class SimTransport {
         else if (vals[pid]) out.push([E, [0x49, n, 0x01, ...vals[pid]]]);
         break;
       }
+      case '3E': { // tester present, physical only
+        const to = this.sh && this.modules[this.sh]?.[0];
+        if (to) out.push([to, [0x7E, 0x00]]);
+        break;
+      }
+      case '22': {
+        const to = this.sh && this.modules[this.sh]?.[0];
+        if (to && cmd === '22F197') { out.push([to, [0x62, 0xF1, 0x97, ...[...this.modules[this.sh][1]].map(c => c.charCodeAt(0))]]); break; }
+        // manufacturer PID used by the sample custom PID
+        out.push(['7E8', cmd === '221310' ? [0x62, 0x13, 0x10, Math.round(this.state().trans + 40)] : [0x7F, 0x22, 0x31]]);
+        break;
+      }
       case '19': { // UDS ReadDTCInformation: only reportDTCByStatusMask (02), only to one module (physical request)
-        const to = this.sh && (parseInt(this.sh, 16) + 8).toString(16).toUpperCase();
+        const to = this.sh && this.modules[this.sh]?.[0];
         if (!to || !this.memory[to]) break;
         if (pid !== '02') { out.push([to, [0x7F, 0x19, 0x12]]); break; }
         const mask = parseInt(cmd.slice(4, 6) || 'FF', 16);
@@ -184,9 +202,6 @@ export class SimTransport {
         break;
       }
       case '14': // UDS clear (not used by the app)
-        break;
-      case '22': // manufacturer PID used by the sample custom PID
-        out.push([E, cmd === '221310' ? [0x62, 0x13, 0x10, Math.round(this.state().trans + 40)] : [0x7F, 0x22, 0x31]]);
         break;
     }
     return out;

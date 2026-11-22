@@ -180,6 +180,17 @@ export const APP_STRINGS: [string, string, string][] = [
   ['Test failed since clear', "Test en échec depuis l'effacement", 'Prueba fallida desde el borrado'],
   ['Test not completed this cycle', 'Test non terminé ce cycle', 'Prueba no completada en este ciclo'],
   ["This car's protocol has no standard way to read the modules' own memory (old ISO 9141 or J1850 cars).", "Le protocole de cette voiture n'a pas de méthode standard pour lire la mémoire propre des modules (anciennes voitures ISO 9141 ou J1850).", 'El protocolo de este coche no tiene una forma estándar de leer la memoria propia de los módulos (coches antiguos ISO 9141 o J1850).'],
+  ['Scanning every module address…', 'Recherche sur chaque adresse de module…', 'Buscando en cada dirección de módulo…'],
+  ['Only the engine and the gearbox answer the generic OBD-II request. A module scan asks every module address once (about a minute) and remembers what it finds for this car.', "Seuls le moteur et la boîte répondent à la demande OBD-II générique. Une recherche de modules interroge chaque adresse une fois (environ une minute) et mémorise ce qu'elle trouve pour cette voiture.", 'Solo el motor y la caja responden a la solicitud OBD-II genérica. Una búsqueda de módulos pregunta a cada dirección una vez (alrededor de un minuto) y recuerda lo que encuentra para este coche.'],
+  ['Last scan:', 'Dernière recherche :', 'Última búsqueda:'],
+  ['Scan all modules', 'Rechercher tous les modules', 'Buscar todos los módulos'],
+  ['Scan all modules again', 'Relancer la recherche des modules', 'Volver a buscar todos los módulos'],
+  ['Module', 'Module', 'Módulo'],
+  ['Gateway', 'Passerelle', 'Pasarela'],
+  ['Airbag', 'Airbag', 'Airbag'],
+  ['Stability control', 'Contrôle de stabilité', 'Control de estabilidad'],
+  ['Access and immobiliser', 'Accès et antidémarrage', 'Acceso e inmovilizador'],
+  ['Instrument cluster', 'Combiné d’instruments', 'Cuadro de instrumentos'],
   ['Diagnostic summary', 'Résumé du diagnostic', 'Resumen del diagnóstico'],
   ['VIN', 'VIN', 'VIN'],
   ['Not reported by the car', 'Non communiqué par la voiture', 'El coche no lo indica'],
@@ -340,6 +351,7 @@ export const APP_STRINGS: [string, string, string][] = [
 
 export const APP_PATTERNS: [RegExp, Record<string, (...a: string[]) => string>][] = [
   [/^(\d+) code\(s\) found$/, { fr: (_, n) => `${n} code(s) trouvé(s)`, es: (_, n) => `${n} código(s) encontrado(s)` }],
+  [/^(\d+) of (\d+) addresses · (\d+) module\(s\) found$/, { fr: (_, a, b, c) => `${a} sur ${b} adresses · ${c} module(s) trouvé(s)`, es: (_, a, b, c) => `${a} de ${b} direcciones · ${c} módulo(s) encontrado(s)` }],
   [/^(\d+) code\(s\)$/, { fr: (_, n) => `${n} code(s)`, es: (_, n) => `${n} código(s)` }],
   [/^(\d+) code\(s\) in module memory$/, { fr: (_, n) => `${n} code(s) dans la mémoire des modules`, es: (_, n) => `${n} código(s) en la memoria de los módulos` }],
   [/^(\d+) code\(s\) reported, (\d+) read$/, {
