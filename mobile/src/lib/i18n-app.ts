@@ -191,6 +191,8 @@ export const APP_STRINGS: [string, string, string][] = [
   ['Stability control', 'Contrôle de stabilité', 'Control de estabilidad'],
   ['Access and immobiliser', 'Accès et antidémarrage', 'Acceso e inmovilizador'],
   ['Instrument cluster', 'Combiné d’instruments', 'Cuadro de instrumentos'],
+  ['Light module', 'Module d’éclairage', 'Módulo de luces'],
+  ['Climate control', 'Climatisation', 'Climatización'],
   ['Diagnostic summary', 'Résumé du diagnostic', 'Resumen del diagnóstico'],
   ['VIN', 'VIN', 'VIN'],
   ['Not reported by the car', 'Non communiqué par la voiture', 'El coche no lo indica'],
