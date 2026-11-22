@@ -151,6 +151,19 @@ export const udsStatusLabels = status => UDS_STATUS_BITS.filter((_, i) => status
 // Active: failing right now (bit 0). Otherwise the code is history: kept in memory, the fault is not present now.
 export const udsActive = status => !!(status & 0x01);
 
+// KWP2000 statusOfDTC (ISO 14230-3): bit 7 warning lamp on, bits 6-5 storage state, bit 4 test not complete,
+// bits 3-0 the fault symptom (maker-specific).
+export function kwpStatusLabels(status) {
+  if (!status) return ['No status reported'];
+  const out = [];
+  const storage = (status >> 5) & 3;
+  out.push(['No fault detected', 'Stored, not present now', 'Intermittent', 'Present now'][storage]);
+  if (status & 0x10) out.push('Test not complete');
+  if (status & 0x80) out.push('Warning light on');
+  return out;
+}
+export const kwpActive = status => ((status >> 5) & 3) === 3;
+
 // Mode 01 PID 01: A = MIL + confirmed code count, B/C/D = readiness monitors.
 export function decodeReadiness([A, B, C, D]) {
   const diesel = !!(B & 8);
@@ -251,6 +264,53 @@ export const OBD = {
     return { answered: Object.keys(ecus).length > 0, ecus, refused, errors: ELM327.errors(raw) };
   },
 
+  // Mode 09 PID 02 (VIN) in diag mode (headers on), from whichever module answers. CAN: one ISO-TP message
+  // 49 02 01 + 17 characters. K-line / J1850: several messages 49 02 <n> + 4 bytes each. null when nobody answers.
+  async vin(elm) {
+    const by = {};
+    for (const r of ELM327.records(await elm.send('0902', 15000), elm.protocolNumber)) {
+      if (r.data[0] !== 0x49 || r.data[1] !== 0x02) continue;
+      (by[r.ecu] ??= []).push(r.data);
+    }
+    for (const msgs of Object.values(by)) {
+      const chars = elm.isCAN ? msgs[0].slice(3) : msgs.sort((a, b) => a[2] - b[2]).flatMap(m => m.slice(3));
+      const v = String.fromCharCode(...chars.filter(b => b >= 0x20 && b < 0x7f)).trim().replace(/^[^A-Z0-9]+/, '');
+      if (/^[A-HJ-NPR-Z0-9]{17}$/.test(v)) return v;
+    }
+    return null;
+  },
+
+  // Every module's own fault memory, read with the service that matches the protocol the adapter detected:
+  //  CAN (ISO 15765-4, 11 or 29 bit, protocols 6-9): UDS 19 02, one module at a time.
+  //  KWP2000 (ISO 14230-4, 5-baud or fast init, protocols 4-5): KWP 18 02 FF 00, all modules, then the silent ones.
+  //  ISO 9141-2 and SAE J1850 (protocols 1-3): no standard service for this, so nothing is asked.
+  // Returns { service: 'uds' | 'kwp' | null, read: [ecu], codes: [{ ecu, code, ftb?, status, active }] }.
+  async memoryCodes(elm, modules) {
+    const p = elm.protocolNumber;
+    if (p >= 6 && p <= 9) {
+      const read = [], codes = [];
+      try {
+        for (const ecu of modules) {
+          try {
+            const u = await OBD.udsCodes(elm, ecu);
+            if (!u.answered) continue;
+            read.push(ecu);
+            for (const c of u.codes) codes.push({ ecu, ...c, active: udsActive(c.status) });
+          } catch (e) { elm.log('!', `fault memory ${ecu}: ` + (e?.message ?? e)); }
+        }
+      } finally { await OBD.udsEnd(elm).catch(() => {}); }
+      return { service: 'uds', read, codes };
+    }
+    if (p === 4 || p === 5) {
+      const k = await OBD.kwpCodes(elm, modules);
+      const read = [...k.answered].sort();
+      // every listed code is kept, status 00 included: some makers (BMW) list stored codes with no status bits set
+      const codes = read.flatMap(ecu => (k.ecus[ecu] ?? []).map(c => ({ ecu, ...c, active: kwpActive(c.status) })));
+      return { service: 'kwp', read, codes };
+    }
+    return { service: null, read: [], codes: [] };
+  },
+
   // UDS (ISO 14229-1) service 19 sub-function 02, reportDTCByStatusMask, sent to one module (CAN only). This is the
   // module's own fault memory: it also holds the old ("history") codes and codes that Mode 03 leaves out, such as
   // network (U) codes. Each record is 2 bytes of code (SAE J2012), a failure type byte and a status byte.
@@ -287,6 +347,48 @@ export const OBD = {
       }
     }
     return { answered, codes, refused, errors: ELM327.errors(raw) };
+  },
+
+  // KWP2000 (ISO 14230-3) service 18, ReadDiagnosticTroubleCodesByStatus, for K-line cars (protocols 4 and 5, e.g.
+  // the BMW E60). Request 18 02 FF 00: every stored code with its status, all groups. Answer: 58, number of codes,
+  // then 3 bytes per code (2 bytes of code, 1 status byte). The code bytes are the maker's own numbering (BMW shows
+  // them as 4 hex digits, e.g. 4F89), so they are kept as hex, not turned into P/C/B/U codes.
+  // Asked to every module at once first (functional address 33); modules that stay silent are then asked one by one
+  // (physical address). Returns { ecus: { '18': [{ code, status }] }, answered: [ecu], refused: [ecu], errors }.
+  // Leaves the header back on the default.
+  async kwpCodes(elm, modules) {
+    const out = { ecus: {}, answered: [], refused: [], errors: [] };
+    if (elm.protocolNumber !== 4 && elm.protocolNumber !== 5) return out;
+    const take = raw => {
+      let last = null; // a long answer can come as several messages from the same module
+      for (const r of ELM327.records(raw, elm.protocolNumber)) {
+        const d = r.data;
+        if (d[0] === 0x7F && d[1] === 0x18) { if (d[2] !== 0x78 && !out.refused.includes(r.ecu)) out.refused.push(r.ecu); last = null; continue; }
+        let recs;
+        if (d[0] === 0x58) { recs = d.slice(2); last = r.ecu; if (!out.answered.includes(r.ecu)) out.answered.push(r.ecu); }
+        else if (last === r.ecu && d[0] !== 0x43 && d[0] !== 0x41) recs = d; // continuation of the same answer
+        else { last = null; continue; }
+        const list = (out.ecus[r.ecu] ??= []);
+        for (let i = 0; i + 2 < recs.length; i += 3) {
+          const [a, b, status] = recs.slice(i, i + 3);
+          if (!a && !b) continue; // padding
+          const code = hex2(a) + hex2(b);
+          if (!list.some(c => c.code === code)) list.push({ code, status });
+        }
+      }
+      out.errors.push(...ELM327.errors(raw).filter(e => !out.errors.includes(e)));
+    };
+    take(await elm.send('1802FF00', 15000));
+    const silent = modules.filter(e => !out.answered.includes(e) && !out.refused.includes(e));
+    try {
+      for (const ecu of silent) {
+        await elm.send('ATSH80' + ecu + 'F1'); // physical: format 80 (the adapter fills in the length), target, tester F1
+        take(await elm.send('1802FF00', 15000));
+      }
+    } finally {
+      if (silent.length) await elm.send('ATSHC133F1'); // ISO 14230-4 default: functional, to 33, from F1
+    }
+    return out;
   },
 
   // Puts the request header back on "every module" after udsCodes.

@@ -92,6 +92,7 @@ export const DTC_DB = {
 
 export function describeDTC(code) {
   if (DTC_DB[code]) return t(DTC_DB[code]);
+  if (/^[0-9A-F]{4}$/.test(code)) return `${t('Manufacturer fault code')} (${t('no description in the built-in list')})`; // K-line maker's own numbering
   const sys = t({ P: 'Powertrain', C: 'Chassis', B: 'Body', U: 'Network' }[code[0]]);
   const none = t('no description in the built-in list');
   if (code[1] === '1' || code[1] === '3' && code[0] !== 'P') return `${sys}: ${t('manufacturer-specific code')}`;
