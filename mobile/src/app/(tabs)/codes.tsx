@@ -14,7 +14,7 @@ import { shareAdapterLog } from '../../lib/adapterLog';
 import { useVehicle, useVehicles, type Vehicle } from '../../lib/garage';
 import { searchUrl, useSettings } from '../../lib/settings';
 import { describeDTC } from '../../lib/obd/dtc-db';
-import { hex2, udsStatusLabels } from '../../lib/obd/obd';
+import { hex2, kwpStatusLabels, udsStatusLabels } from '../../lib/obd/obd';
 import { t, useLang } from '../../lib/i18n';
 import { C } from '../../lib/theme';
 
@@ -89,7 +89,7 @@ function CodeCard({ item, kind, index, car }: { item: ModuleCode | MemoryCode; k
           <View className="flex-1">
             <View className="flex-row items-center">
               <Text style={{ fontFamily: 'monospace' }} className="mr-2 text-lg font-extrabold text-text">
-                {code}{mem ? <Text className="text-sm font-semibold text-muted">-{hex2(mem.ftb)}</Text> : null}
+                {code}{mem?.kind === 'uds' && mem.ftb != null ? <Text className="text-sm font-semibold text-muted">-{hex2(mem.ftb)}</Text> : null}
               </Text>
               <Pill kind={KIND_PILL[kind]} text={kind} />
             </View>
@@ -100,7 +100,7 @@ function CodeCard({ item, kind, index, car }: { item: ModuleCode | MemoryCode; k
             <Text numberOfLines={open ? undefined : 2} className="mt-1.5 text-sm text-muted">{describeDTC(code)}</Text>
             {mem ? (
               <Text className="mt-1 text-[11px] text-muted">
-                {t('Status:')} {udsStatusLabels(mem.status).map((l: string) => t(l)).join(', ')} ({hex2(mem.status)})
+                {t('Status:')} {(mem.kind === 'kwp' ? kwpStatusLabels : udsStatusLabels)(mem.status).map((l: string) => t(l)).join(', ')} ({hex2(mem.status)})
               </Text>
             ) : null}
           </View>
@@ -117,6 +117,49 @@ function CodeCard({ item, kind, index, car }: { item: ModuleCode | MemoryCode; k
         </PressableScale>
       </PressableScale>
     </Animated.View>
+  );
+}
+
+type Entry = { item: ModuleCode | MemoryCode; kind: Kind };
+
+// One module: its name and address, how many codes it holds; tap to open its codes.
+function EcuBox({ mod, entries, index, car }: { mod: { ecu: string; module: string }; entries: Entry[]; index: number; car?: Vehicle }) {
+  const [open, setOpen] = useState(false);
+  const count = new Set(entries.map(e => e.item.code)).size;
+  const bad = entries.some(e => e.kind === 'Stored' || e.kind === 'Active');
+  const color = !count ? C.ok : bad ? C.bad : C.warn;
+  return (
+    <Animated.View entering={FadeInDown.delay(index * 80).springify()} layout={LinearTransition.springify()}>
+      <PressableScale onPress={() => count && setOpen(!open)} accessibilityRole="button" accessibilityState={{ expanded: open }}
+        className="mb-2 flex-row items-center rounded-3xl border border-line bg-panel p-4">
+        <View style={{ backgroundColor: color + '22' }} className="mr-3 h-10 w-10 items-center justify-center rounded-2xl">
+          <Ionicons name="hardware-chip-outline" size={20} color={color} />
+        </View>
+        <View className="flex-1">
+          <Text className="text-base font-bold text-text">{t(mod.module)}</Text>
+          <Text style={{ fontFamily: 'monospace' }} className="text-xs text-muted">{t('ID')} {mod.ecu}</Text>
+        </View>
+        <View style={{ backgroundColor: color + '22' }} className="mr-2 rounded-full px-3 py-1">
+          <Text style={{ color }} className="text-xs font-bold">{count ? t(`${count} code(s)`) : t('No codes')}</Text>
+        </View>
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={20} color={count ? C.text : C.line} />
+      </PressableScale>
+      {open ? (
+        <View className="mb-2 ml-3">
+          {entries.map((e, i) => <CodeCard key={e.kind + e.item.code + ('ftb' in e.item ? e.item.ftb ?? '' : '')} item={e.item} kind={e.kind} index={i} car={car} />)}
+        </View>
+      ) : null}
+    </Animated.View>
+  );
+}
+
+function SummaryRow({ icon, label, value, mono }: { icon: any; label: string; value: string; mono?: boolean }) {
+  return (
+    <View className="flex-row items-center py-1.5">
+      <Ionicons name={icon} size={16} color={C.accent} />
+      <Text className="ml-2 w-28 text-xs text-muted">{t(label)}</Text>
+      <Text selectable style={mono ? { fontFamily: 'monospace' } : undefined} className="flex-1 text-sm font-semibold text-text">{value}</Text>
+    </View>
   );
 }
 
@@ -158,9 +201,17 @@ export default function Codes() {
   }
 
   const total = res ? res.stored.length + res.pending.length + res.permanent.length : 0;
-  const memActive = res ? res.memory.filter(c => c.active) : [], memHistory = res ? res.memory.filter(c => !c.active) : [];
+  // every module that answered anything, with all its codes: generic (stored, pending, permanent) then its own memory
+  const mods = res ? [...new Map([...res.modules, ...res.memoryRead, ...res.stored, ...res.pending, ...res.permanent, ...res.memory]
+    .map(m => [m.ecu, { ecu: m.ecu, module: m.module }])).values()].sort((a, b) => a.ecu.localeCompare(b.ecu)) : [];
+  const entriesOf = (ecu: string): Entry[] => !res ? [] : [
+    ...res.stored.filter(c => c.ecu === ecu).map(item => ({ item, kind: 'Stored' as Kind })),
+    ...res.pending.filter(c => c.ecu === ecu).map(item => ({ item, kind: 'Pending' as Kind })),
+    ...res.permanent.filter(c => c.ecu === ecu).map(item => ({ item, kind: 'Permanent' as Kind })),
+    ...res.memory.filter(c => c.ecu === ecu).map(item => ({ item, kind: (item.active ? 'Active' : 'History') as Kind })),
+  ];
   const mil = res?.readiness?.mil;
-  let n = 0;
+  const n = mods.length;
   return (
     <Screen title="Trouble codes">
       <VehicleSwitcher />
@@ -180,7 +231,14 @@ export default function Codes() {
 
       {res ? (
         <>
-          <Card index={1} className="mt-3 flex-row items-center">
+          <SectionTitle>Diagnostic summary</SectionTitle>
+          <Card index={1}>
+            <SummaryRow icon="barcode-outline" label="VIN" value={res.vin ?? t('Not reported by the car')} mono={!!res.vin} />
+            <SummaryRow icon="hardware-chip-outline" label="Modules found" value={`${mods.length}${mods.length ? ' · ' + mods.map(m => m.ecu).join(', ') : ''}`} />
+            <SummaryRow icon="git-network-outline" label="Protocol" value={res.protocol || '?'} />
+          </Card>
+
+          <Card index={2} className="mt-3 flex-row items-center">
             <View style={{ backgroundColor: (mil ? C.warn : C.ok) + '22', shadowColor: mil ? C.warn : C.ok, shadowOpacity: 0.8, shadowRadius: 14 }}
               className="mr-3 h-12 w-12 items-center justify-center rounded-2xl">
               <Ionicons name={mil ? 'warning' : 'checkmark-circle'} size={26} color={mil ? C.warn : C.ok} />
@@ -189,12 +247,11 @@ export default function Codes() {
               <Text className="text-base font-bold text-text">{t('Check engine light:')} {t(mil ? 'ON' : 'OFF')}</Text>
               <Text className="text-xs text-muted">{total ? t(`${total} code(s) found`) : t('No trouble codes.')}</Text>
               {res.memory.length ? <Text className="text-xs text-muted">{t(`${res.memory.length} code(s) in module memory`)}</Text> : null}
-              <Text className="mt-0.5 text-[11px] text-muted">{t('Modules read:')} {res.modules.map(moduleLabel).join(', ')}</Text>
             </View>
           </Card>
 
-          {res.mismatch.length || res.unanswered.length || res.refused.length ? (
-            <Card index={2} className="mt-3">
+          {res.mismatch.length || res.unanswered.length || res.refused.length || !res.memoryService ? (
+            <Card index={3} className="mt-3">
               {res.mismatch.map(m => (
                 <View key={m.ecu} className="mb-1.5 flex-row">
                   <Ionicons name="alert-circle" size={16} color={C.bad} />
@@ -217,28 +274,19 @@ export default function Codes() {
                   </Text>
                 </View>
               ))}
+              {!res.memoryService ? (
+                <View className="mb-1.5 flex-row">
+                  <Ionicons name="information-circle" size={16} color={C.muted} />
+                  <Text className="ml-1.5 flex-1 text-xs text-muted">{t("This car's protocol has no standard way to read the modules' own memory (old ISO 9141 or J1850 cars).")}</Text>
+                </View>
+              ) : null}
               {res.mismatch.length ? <LogLink onPress={shareLog} /> : null}
             </Card>
           ) : null}
 
-          {(['Stored', 'Pending', 'Permanent'] as const).map(kind => {
-            const list = res[kind.toLowerCase() as 'stored' | 'pending' | 'permanent'];
-            return list.length ? (
-              <View key={kind}>
-                <SectionTitle>{kind}</SectionTitle>
-                {list.map(c => <CodeCard key={kind + c.ecu + c.code} item={c} kind={kind} index={n++} car={car} />)}
-              </View>
-            ) : null;
-          })}
-
-          {res.memory.length ? (
-            <View>
-              <SectionTitle>Module memory</SectionTitle>
-              <T className="mb-2 px-1 text-[11px] text-muted">Codes kept in each module's own memory. Active: the fault is present now. History: it happened before and is not present now.</T>
-              {memActive.map(c => <CodeCard key={'A' + c.ecu + c.code + c.ftb} item={c} kind="Active" index={n++} car={car} />)}
-              {memHistory.map(c => <CodeCard key={'H' + c.ecu + c.code + c.ftb} item={c} kind="History" index={n++} car={car} />)}
-            </View>
-          ) : null}
+          <SectionTitle>Modules</SectionTitle>
+          <T className="mb-2 px-1 text-[11px] text-muted">Tap a module to see its codes. Active: the fault is present now. History: it happened before and is not present now.</T>
+          {mods.map((m, i) => <EcuBox key={m.ecu} mod={m} entries={entriesOf(m.ecu)} index={i} car={car} />)}
 
           {res.readiness ? (
             <>

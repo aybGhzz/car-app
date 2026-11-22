@@ -117,7 +117,9 @@ export class ELM327 {
       if (!can) { // 3 header bytes (priority, target, source), data, checksum
         if (l.length % 2 || l.length < 10) continue;
         const b = bytes(l);
-        out.push({ ecu: hex2(b[2]), data: b.slice(3, -1) });
+        // ISO 14230: when the format byte's length bits are 0, a separate length byte follows the 3 header bytes
+        const extra = protocolNumber >= 4 && protocolNumber <= 5 && b[0] >= 0x80 && !(b[0] & 0x3f) ? 1 : 0;
+        out.push({ ecu: hex2(b[2]), data: b.slice(3 + extra, -1) });
         continue;
       }
       if (l.length < hl + 2 || (l.length - hl) % 2) continue;

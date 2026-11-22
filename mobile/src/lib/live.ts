@@ -3,7 +3,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { PermissionsAndroid, Platform } from 'react-native';
 import { ELM327 } from './obd/elm327';
-import { OBD, PIDS, PID_KEYS, hex2, isBitmapPid, moduleRole, udsActive } from './obd/obd';
+import { OBD, PIDS, PID_KEYS, hex2, isBitmapPid, moduleRole } from './obd/obd';
 import { adapterLog, endDiagLog, startDiagLog } from './adapterLog';
 import { SimTransport } from './obd/simulator';
 import { BleTransport, ClassicTransport, classicReady, scanBle } from './transports/bluetooth';
@@ -487,7 +487,8 @@ async function exclusive<T>(mode: Mode, fn: (elm: any) => Promise<T>): Promise<T
 
 export type ModuleCode = { code: string; ecu: string; module: string };
 // A code from a module's own fault memory (UDS 19 02): failure type byte and status byte as the module reported them.
-export type MemoryCode = ModuleCode & { ftb: number; status: number; active: boolean };
+// kind: 'uds' (CAN, ISO 14229 status byte, failure type byte) or 'kwp' (K-line, ISO 14230 status byte, maker's hex code).
+export type MemoryCode = ModuleCode & { kind: 'uds' | 'kwp'; ftb?: number; status: number; active: boolean };
 type Readiness = { mil: boolean; count: number; diesel: boolean; monitors: { name: string; supported: boolean; complete: boolean }[] };
 export type CodesResult = {
   stored: ModuleCode[];
@@ -495,6 +496,9 @@ export type CodesResult = {
   permanent: ModuleCode[];
   memory: MemoryCode[]; // codes in the modules' own fault memory, active and history (CAN cars only)
   memoryRead: { ecu: string; module: string }[]; // modules whose fault memory was read
+  memoryService: 'uds' | 'kwp' | null; // null: the car's protocol has no standard fault memory service
+  vin: string | null; // Mode 09 PID 02, null when the car does not report it
+  protocol: string; // the protocol the adapter detected
   modules: { ecu: string; module: string }[]; // the modules that answered the stored-codes request
   unanswered: ('pending' | 'permanent')[]; // requests no module answered (not supported, or lost)
   refused: string[]; // modules that refused a request
@@ -517,24 +521,15 @@ export async function readCodes(): Promise<CodesResult> {
       pending: (await OBD.dtcs(elm, '07')) as Dtcs,
       permanent: (await OBD.dtcs(elm, '0A')) as Dtcs,
       ready: (await OBD.readinessByEcu(elm)) as Record<string, Readiness>,
+      vin: (await OBD.vin(elm).catch(() => null)) as string | null,
     }));
-    // Each module's own fault memory, asked one module at a time (CAN only). A module that does not support it just
-    // refuses: that never hides the Mode 03 result above.
-    type Uds = { answered: boolean; codes: { code: string; ftb: number; status: number }[]; refused: boolean };
-    const memory: MemoryCode[] = [], memoryRead: { ecu: string; module: string }[] = [];
+    // Each module's own fault memory, with the service that matches the detected protocol (see OBD.memoryCodes).
+    // A module that does not support it just refuses: that never hides the Mode 03 result above.
+    type Mem = { service: 'uds' | 'kwp' | null; read: string[]; codes: { ecu: string; code: string; ftb?: number; status: number; active: boolean }[] };
     const targets = [...new Set([...Object.keys(r.stored.ecus), ...Object.keys(r.ready)])].sort();
-    if (targets.length) await exclusive('diag', async elm => {
-      try {
-        for (const ecu of targets) {
-          try {
-            const u = (await OBD.udsCodes(elm, ecu)) as Uds;
-            if (!u.answered) continue;
-            memoryRead.push(label(ecu));
-            for (const c of u.codes) memory.push({ ...c, ...label(ecu), active: udsActive(c.status) });
-          } catch (e: any) { adapterLog('!', `fault memory ${ecu}: ` + (e?.message ?? e)); }
-        }
-      } finally { await OBD.udsEnd(elm).catch(() => {}); }
-    });
+    const m: Mem = targets.length ? (await exclusive('diag', elm => OBD.memoryCodes(elm, targets))) as Mem : { service: null, read: [], codes: [] };
+    const memoryRead = m.read.map(label);
+    const memory: MemoryCode[] = m.service ? m.codes.map(c => ({ ...c, ...label(c.ecu), kind: m.service! })) : [];
     memory.sort((a, b) => Number(b.active) - Number(a.active) || a.ecu.localeCompare(b.ecu) || a.code.localeCompare(b.code));
     if (!r.stored.answered) {
       const why = r.stored.refused.length ? 'refused by ' + r.stored.refused.join(', ') : r.stored.errors.join(', ') || 'no answer';
@@ -552,7 +547,10 @@ export async function readCodes(): Promise<CodesResult> {
       permanent: flat(r.permanent.ecus),
       memory,
       memoryRead,
-      modules: Object.keys(r.stored.ecus).sort().map(label),
+      memoryService: m.service,
+      vin: r.vin,
+      protocol: S.elm?.protocolName ?? '',
+      modules: [...new Set([...targets, ...m.read])].sort().map(label),
       unanswered: (['pending', 'permanent'] as const).filter(k => !r[k].answered),
       refused: [...new Set([r.stored, r.pending, r.permanent].flatMap(x => x.refused))],
       mismatch,

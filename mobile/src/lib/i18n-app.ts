@@ -179,6 +179,24 @@ export const APP_STRINGS: [string, string, string][] = [
   ['Test not completed since clear', "Test non terminé depuis l'effacement", 'Prueba no completada desde el borrado'],
   ['Test failed since clear', "Test en échec depuis l'effacement", 'Prueba fallida desde el borrado'],
   ['Test not completed this cycle', 'Test non terminé ce cycle', 'Prueba no completada en este ciclo'],
+  ["This car's protocol has no standard way to read the modules' own memory (old ISO 9141 or J1850 cars).", "Le protocole de cette voiture n'a pas de méthode standard pour lire la mémoire propre des modules (anciennes voitures ISO 9141 ou J1850).", 'El protocolo de este coche no tiene una forma estándar de leer la memoria propia de los módulos (coches antiguos ISO 9141 o J1850).'],
+  ['Diagnostic summary', 'Résumé du diagnostic', 'Resumen del diagnóstico'],
+  ['VIN', 'VIN', 'VIN'],
+  ['Not reported by the car', 'Non communiqué par la voiture', 'El coche no lo indica'],
+  ['Modules found', 'Modules trouvés', 'Módulos encontrados'],
+  ['Protocol', 'Protocole', 'Protocolo'],
+  ['Modules', 'Modules', 'Módulos'],
+  ['ID', 'ID', 'ID'],
+  ['No codes', 'Aucun code', 'Sin códigos'],
+  ['Tap a module to see its codes. Active: the fault is present now. History: it happened before and is not present now.', "Touchez un module pour voir ses codes. Actif : le défaut est présent maintenant. Historique : il s'est produit avant et n'est plus présent.", 'Toque un módulo para ver sus códigos. Activo: la avería está presente ahora. Historial: ocurrió antes y ya no está presente.'],
+  ['Manufacturer fault code', 'Code défaut constructeur', 'Código de avería del fabricante'],
+  ['No status reported', 'Aucun état indiqué', 'Ningún estado indicado'],
+  ['No fault detected', 'Aucun défaut détecté', 'Ninguna avería detectada'],
+  ['Stored, not present now', "Mémorisé, absent maintenant", 'Memorizado, no presente ahora'],
+  ['Intermittent', 'Intermittent', 'Intermitente'],
+  ['Present now', 'Présent maintenant', 'Presente ahora'],
+  ['Test not complete', 'Test non terminé', 'Prueba no completada'],
+  ['Warning light on', 'Témoin allumé', 'Testigo encendido'],
   ['Warning light requested', 'Témoin demandé', 'Testigo solicitado'],
   // adapter memory, background recording, reconnect
   ['Connecting to', 'Connexion à', 'Conectando a'],
@@ -317,6 +335,7 @@ export const APP_STRINGS: [string, string, string][] = [
 
 export const APP_PATTERNS: [RegExp, Record<string, (...a: string[]) => string>][] = [
   [/^(\d+) code\(s\) found$/, { fr: (_, n) => `${n} code(s) trouvé(s)`, es: (_, n) => `${n} código(s) encontrado(s)` }],
+  [/^(\d+) code\(s\)$/, { fr: (_, n) => `${n} code(s)`, es: (_, n) => `${n} código(s)` }],
   [/^(\d+) code\(s\) in module memory$/, { fr: (_, n) => `${n} code(s) dans la mémoire des modules`, es: (_, n) => `${n} código(s) en la memoria de los módulos` }],
   [/^(\d+) code\(s\) reported, (\d+) read$/, {
     fr: (_, n, r) => `${n} code(s) signalé(s), ${r} lu(s)`,
