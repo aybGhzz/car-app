@@ -15,10 +15,16 @@ export class SimTransport {
     this.pending = ['P0171'];
     this.permanent = ['P0420'];
     this.gearbox = { stored: ['P0616'], pending: [], permanent: [] };
+    // Each module's own fault memory (UDS 19 02): [code, failure type byte, status byte]. Old ("history") codes are
+    // here but not in Mode 03, like on the real car: a status without bit 0 means the fault is not present now.
+    this.memory = {
+      '7E8': [['P0301', 0x00, 0x2F], ['P0562', 0x16, 0x28], ['P068A', 0x00, 0x68], ['U0167', 0x00, 0x28]],
+      '7E9': [['P0616', 0x13, 0x29]],
+    };
     this.clearedAt = null;
     this.freeze = { ...this.state(0), rpm: 2450, speed: 72, coolant: 88, load: 64, iat: 31, maf: 28.4, throttle: 34, stft: -6.2, ltft: 3.1, map: 68, timing: 18 };
   }
-  reset() { this.echo = true; this.spaces = true; this.searching = true; this.headers = false; this.cra = null; }
+  reset() { this.echo = true; this.spaces = true; this.searching = true; this.headers = false; this.cra = null; this.sh = null; }
   async open() {}
   async close() {}
   async write(s) {
@@ -110,6 +116,8 @@ export class SimTransport {
       if (/^H[01]$/.test(c)) this.headers = c === 'H1';
       if (c.startsWith('CRA')) this.cra = c.slice(3) || null;
       if (c === 'AR') this.cra = null;
+      if (c.startsWith('SH')) this.sh = c.slice(2) === '7DF' ? null : c.slice(2); // physical request to one module
+      if (c === 'D') this.sh = null;
       if (c.startsWith('SP')) this.searching = true;
       if (c === 'DPN') return 'A6';
       if (c === 'DP') return 'AUTO, ISO 15765-4 (CAN 11/500)';
@@ -153,6 +161,7 @@ export class SimTransport {
       }
       case '04':
         this.stored = []; this.pending = [];
+        this.memory = { '7E8': [], '7E9': [] };
         gb.stored = []; gb.pending = [];
         this.clearedAt = (performance.now() - this.start) / 1000;
         out.push([G, [0x44]], [E, [0x44]]);
@@ -165,6 +174,17 @@ export class SimTransport {
         else if (vals[pid]) out.push([E, [0x49, n, 0x01, ...vals[pid]]]);
         break;
       }
+      case '19': { // UDS ReadDTCInformation: only reportDTCByStatusMask (02), only to one module (physical request)
+        const to = this.sh && (parseInt(this.sh, 16) + 8).toString(16).toUpperCase();
+        if (!to || !this.memory[to]) break;
+        if (pid !== '02') { out.push([to, [0x7F, 0x19, 0x12]]); break; }
+        const mask = parseInt(cmd.slice(4, 6) || 'FF', 16);
+        const list = this.memory[to].filter(([, , st]) => st & mask);
+        out.push([to, [0x59, 0x02, 0xFF, ...list.flatMap(([c, ftb, st]) => [...encodeDTC(c), ftb, st])]]);
+        break;
+      }
+      case '14': // UDS clear (not used by the app)
+        break;
       case '22': // manufacturer PID used by the sample custom PID
         out.push([E, cmd === '221310' ? [0x62, 0x13, 0x10, Math.round(this.state().trans + 40)] : [0x7F, 0x22, 0x31]]);
         break;

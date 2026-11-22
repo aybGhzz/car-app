@@ -167,6 +167,19 @@ export const APP_STRINGS: [string, string, string][] = [
   ['None yet', 'Aucune pour le moment', 'Ninguna todavía'],
   ['Share', 'Partager', 'Compartir'],
   ['The log is empty.', 'Le journal est vide.', 'El registro está vacío.'],
+  // module fault memory (UDS 19 02)
+  ['Module memory', 'Mémoire des modules', 'Memoria de los módulos'],
+  ["Codes kept in each module's own memory. Active: the fault is present now. History: it happened before and is not present now.", "Codes gardés dans la mémoire de chaque module. Actif : le défaut est présent maintenant. Historique : il s'est produit avant et n'est plus présent.", 'Códigos guardados en la memoria de cada módulo. Activo: la avería está presente ahora. Historial: ocurrió antes y ya no está presente.'],
+  ['Active', 'Actif', 'Activo'],
+  ['History', 'Historique', 'Historial'],
+  ['Status:', 'État :', 'Estado:'],
+  ['Test failed now', 'Test en échec maintenant', 'Prueba fallida ahora'],
+  ['Test failed this cycle', 'Test en échec ce cycle', 'Prueba fallida en este ciclo'],
+  ['Confirmed', 'Confirmé', 'Confirmado'],
+  ['Test not completed since clear', "Test non terminé depuis l'effacement", 'Prueba no completada desde el borrado'],
+  ['Test failed since clear', "Test en échec depuis l'effacement", 'Prueba fallida desde el borrado'],
+  ['Test not completed this cycle', 'Test non terminé ce cycle', 'Prueba no completada en este ciclo'],
+  ['Warning light requested', 'Témoin demandé', 'Testigo solicitado'],
   // adapter memory, background recording, reconnect
   ['Connecting to', 'Connexion à', 'Conectando a'],
   ['The last adapter did not answer. Try again or pick another one.', 'Le dernier adaptateur n’a pas répondu. Réessayez ou choisissez-en un autre.', 'El último adaptador no respondió. Inténtelo de nuevo o elija otro.'],
@@ -304,6 +317,7 @@ export const APP_STRINGS: [string, string, string][] = [
 
 export const APP_PATTERNS: [RegExp, Record<string, (...a: string[]) => string>][] = [
   [/^(\d+) code\(s\) found$/, { fr: (_, n) => `${n} code(s) trouvé(s)`, es: (_, n) => `${n} código(s) encontrado(s)` }],
+  [/^(\d+) code\(s\) in module memory$/, { fr: (_, n) => `${n} code(s) dans la mémoire des modules`, es: (_, n) => `${n} código(s) en la memoria de los módulos` }],
   [/^(\d+) code\(s\) reported, (\d+) read$/, {
     fr: (_, n, r) => `${n} code(s) signalé(s), ${r} lu(s)`,
     es: (_, n, r) => `${n} código(s) señalado(s), ${r} leído(s)`,
