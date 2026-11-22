@@ -558,7 +558,9 @@ export async function readCodes(): Promise<CodesResult> {
     type Mem = { service: 'uds' | 'kwp' | null; read: string[]; codes: { ecu: string; code: string; ftb?: number; status: number; active: boolean }[] };
     const saved = scannedModules()?.list ?? [];
     const targets = [...new Set([...Object.keys(r.stored.ecus), ...Object.keys(r.ready), ...saved.map(x => x.ecu)])].sort();
-    const asked = targets.map(ecu => saved.find(x => x.ecu === ecu) ?? ecu); // a scanned module is asked on its own ID
+    // A scanned module is asked on its own request ID. The OBD-II modules (7E8-7EF) always use the standard pair
+    // (7E0-7E7): a scan saved by 1.1.6-1.1.8 could hold a wrong ID for them (the Accent's engine on 700).
+    const asked = targets.map(ecu => (/^7E[89A-F]$/.test(ecu) ? ecu : saved.find(x => x.ecu === ecu) ?? ecu));
     const m: Mem = targets.length ? (await exclusive('diag', elm => OBD.memoryCodes(elm, asked))) as Mem : { service: null, read: [], codes: [] };
     const memoryRead = m.read.map(label);
     const memory: MemoryCode[] = m.service ? m.codes.map(c => ({ ...c, ...label(c.ecu), kind: m.service! })) : [];
