@@ -363,7 +363,7 @@ export const OBD = {
       let last = null; // a long answer can come as several messages from the same module
       for (const r of ELM327.records(raw, elm.protocolNumber)) {
         const d = r.data;
-        if (d[0] === 0x7F && d[1] === 0x18) { if (d[2] !== 0x78 && !out.refused.includes(r.ecu)) out.refused.push(r.ecu); last = null; continue; }
+        if (d[0] === 0x7F && d[1] === 0x18) { if (d[2] !== 0x78 && !out.refused.includes(r.ecu) && !out.answered.includes(r.ecu)) out.refused.push(r.ecu); last = null; continue; }
         let recs;
         if (d[0] === 0x58) { recs = d.slice(2); last = r.ecu; if (!out.answered.includes(r.ecu)) out.answered.push(r.ecu); }
         else if (last === r.ecu && d[0] !== 0x43 && d[0] !== 0x41) recs = d; // continuation of the same answer
@@ -378,12 +378,19 @@ export const OBD = {
       }
       out.errors.push(...ELM327.errors(raw).filter(e => !out.errors.includes(e)));
     };
-    take(await elm.send('1802FF00', 15000));
+    // The standard leaves the request's status type and DTC group to the maker, and modules differ: some answer
+    // "0 codes" to one form and list their codes for another (the E60 gearbox answers 58 00 to 18 02 FF 00).
+    // So every form is asked and the codes are merged. Status type 02 or 00; group FF00 (all groups, ISO 14230-3)
+    // or FFFF (all codes, used by many makers).
+    const FORMS = ['1802FF00', '1802FFFF', '1800FFFF'];
+    for (const f of FORMS) take(await elm.send(f, 15000));
     const silent = modules.filter(e => !out.answered.includes(e) && !out.refused.includes(e));
     try {
       for (const ecu of silent) {
-        await elm.send('ATSH80' + ecu + 'F1'); // physical: format 80 (the adapter fills in the length), target, tester F1
-        take(await elm.send('1802FF00', 15000));
+        // physical: format 84 (physical address, 4 data bytes; right whether or not the adapter fills in the
+        // length itself), target, tester F1
+        await elm.send('ATSH84' + ecu + 'F1');
+        for (const f of FORMS) take(await elm.send(f, 15000));
       }
     } finally {
       if (silent.length) await elm.send('ATSHC133F1'); // ISO 14230-4 default: functional, to 33, from F1
