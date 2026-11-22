@@ -509,8 +509,12 @@ export type CodesResult = {
 
 // Modules found by a module scan, per car: { at, list: [{ ecu, req, name }] }.
 export type ScannedModule = { ecu: string; req: string; name: string };
-const scanKey = () => 'modules.' + S.vehicle;
-export const scannedModules = (): { at: number; list: ScannedModule[] } | null => kv.get(scanKey(), null);
+// Not 'modules.<car>': that key already holds the live-data PID map saved on connect (ModuleScan, another shape).
+const scanKey = () => 'diagModules.' + S.vehicle;
+export const scannedModules = (): { at: number; list: ScannedModule[] } | null => {
+  const v = kv.get<any>(scanKey(), null);
+  return v && Array.isArray(v.list) ? v : null;
+};
 const carMake = () => (vehicleById(S.vehicle) as any)?.make as string | undefined;
 // A module's name: what it said about itself in the last scan, else the usual module at that address.
 const label = (ecu: string) => ({ ecu, module: scannedModules()?.list.find(m => m.ecu === ecu)?.name ?? (addressName(ecu, carMake()) as string) });
