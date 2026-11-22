@@ -142,6 +142,15 @@ export function encodeDTC(code) {
   return [('PCBU'.indexOf(code[0]) << 6) | (n >> 8), n & 255];
 }
 
+// UDS DTC status byte (ISO 14229-1, DTCStatusMask), bit 0 first.
+export const UDS_STATUS_BITS = [
+  'Test failed now', 'Test failed this cycle', 'Pending', 'Confirmed',
+  'Test not completed since clear', 'Test failed since clear', 'Test not completed this cycle', 'Warning light requested',
+];
+export const udsStatusLabels = status => UDS_STATUS_BITS.filter((_, i) => status & (1 << i));
+// Active: failing right now (bit 0). Otherwise the code is history: kept in memory, the fault is not present now.
+export const udsActive = status => !!(status & 0x01);
+
 // Mode 01 PID 01: A = MIL + confirmed code count, B/C/D = readiness monitors.
 export function decodeReadiness([A, B, C, D]) {
   const diesel = !!(B & 8);
@@ -240,6 +249,51 @@ export const OBD = {
       }
     }
     return { answered: Object.keys(ecus).length > 0, ecus, refused, errors: ELM327.errors(raw) };
+  },
+
+  // UDS (ISO 14229-1) service 19 sub-function 02, reportDTCByStatusMask, sent to one module (CAN only). This is the
+  // module's own fault memory: it also holds the old ("history") codes and codes that Mode 03 leaves out, such as
+  // network (U) codes. Each record is 2 bytes of code (SAE J2012), a failure type byte and a status byte.
+  // Returns { answered, codes: [{ code, ftb, status }], refused, errors }. Leaves the request header on that module:
+  // the caller puts the default back with udsEnd.
+  async udsCodes(elm, ecu) {
+    if (!elm.isCAN) return { answered: false, codes: [], refused: false, errors: [] };
+    const ext = ecu.length === 8;
+    if (ext) { // 18DAF1xx answers to 18DAxxF1: the priority byte goes through ATCP, the rest through ATSH
+      await elm.send('ATCP18');
+      await elm.send('ATSHDA' + ecu.slice(6) + 'F1');
+    } else {
+      await elm.send('ATSH' + (parseInt(ecu, 16) - 8).toString(16).toUpperCase()); // 7E8 answers to 7E0
+    }
+    let raw = await elm.send('1902FF', 15000);
+    let recs = ELM327.records(raw, elm.protocolNumber).filter(r => r.ecu === ecu);
+    // 7F 19 78 = "busy, answer follows". If the adapter gave up before the answer came, ask once more.
+    if (recs.length && recs.every(r => r.data[0] === 0x7F && r.data[2] === 0x78)) {
+      raw = await elm.send('1902FF', 15000);
+      recs = ELM327.records(raw, elm.protocolNumber).filter(r => r.ecu === ecu);
+    }
+    const codes = [];
+    let answered = false, refused = false;
+    for (const r of recs) {
+      if (r.data[0] === 0x7F && r.data[1] === 0x19) { if (r.data[2] !== 0x78) refused = true; continue; }
+      if (r.data[0] !== 0x59 || r.data[1] !== 0x02) continue;
+      answered = true;
+      for (let i = 3; i + 3 < r.data.length; i += 4) {
+        const [a, b, ftb, status] = r.data.slice(i, i + 4);
+        if (!a && !b && !ftb) continue; // padding
+        if (!status) continue; // no status bit set: the record says nothing
+        const code = decodeDTC(a, b);
+        if (!codes.some(c => c.code === code && c.ftb === ftb)) codes.push({ code, ftb, status });
+      }
+    }
+    return { answered, codes, refused, errors: ELM327.errors(raw) };
+  },
+
+  // Puts the request header back on "every module" after udsCodes.
+  async udsEnd(elm) {
+    if (!elm.isCAN) return;
+    if (elm.defaultHeader.length === 8) { await elm.send('ATCP18'); await elm.send('ATSH' + elm.defaultHeader.slice(2)); }
+    else await elm.send('ATSH' + elm.defaultHeader);
   },
 
   // Mode 04 goes to every module. Returns the modules that confirmed.

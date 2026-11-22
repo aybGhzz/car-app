@@ -9,11 +9,12 @@ import { DotsLoader } from '../../components/Loaders';
 import { VehicleSwitcher } from '../../components/VehicleSwitcher';
 import { Sheet } from '../../components/Sheet';
 import { Button, Card, Empty, Pill, PressableScale, SectionTitle, T } from '../../components/ui';
-import { clearCodes, connect, readCodes, useLive, type CodesResult, type ModuleCode } from '../../lib/live';
+import { clearCodes, connect, readCodes, useLive, type CodesResult, type MemoryCode, type ModuleCode } from '../../lib/live';
 import { shareAdapterLog } from '../../lib/adapterLog';
 import { useVehicle, useVehicles, type Vehicle } from '../../lib/garage';
 import { searchUrl, useSettings } from '../../lib/settings';
 import { describeDTC } from '../../lib/obd/dtc-db';
+import { hex2, udsStatusLabels } from '../../lib/obd/obd';
 import { t, useLang } from '../../lib/i18n';
 import { C } from '../../lib/theme';
 
@@ -70,12 +71,16 @@ function LogLink({ onPress }: { onPress: () => void }) {
 const searchQuery = (v: Vehicle | undefined, code: string) => [v?.make, v?.model, v?.year, v?.engine, code].filter(Boolean).join(' ');
 const ENGINE_NAME = { google: 'Google', bing: 'Bing', duckduckgo: 'DuckDuckGo' } as const;
 
-function CodeCard({ item, kind, index, car }: { item: ModuleCode; kind: 'Stored' | 'Pending' | 'Permanent'; index: number; car?: Vehicle }) {
+type Kind = 'Stored' | 'Pending' | 'Permanent' | 'Active' | 'History';
+const KIND_PILL: Record<Kind, 'bad' | 'warn' | 'off'> = { Stored: 'bad', Pending: 'warn', Permanent: 'off', Active: 'bad', History: 'off' };
+
+function CodeCard({ item, kind, index, car }: { item: ModuleCode | MemoryCode; kind: Kind; index: number; car?: Vehicle }) {
   const { code } = item;
+  const mem = 'status' in item ? item : null; // a code from the module's own fault memory: failure type + status
   const [open, setOpen] = useState(false);
   const { search } = useSettings();
   const q = searchQuery(car, code);
-  const color = kind === 'Stored' ? C.bad : kind === 'Pending' ? C.warn : C.violet;
+  const color = kind === 'Stored' || kind === 'Active' ? C.bad : kind === 'Pending' ? C.warn : kind === 'History' ? C.muted : C.violet;
   return (
     <Animated.View entering={FadeInDown.delay(index * 90).springify()} exiting={FadeOut} layout={LinearTransition.springify()}>
       <PressableScale onPress={() => setOpen(!open)} className="mb-2 overflow-hidden rounded-3xl border border-line bg-panel">
@@ -83,14 +88,21 @@ function CodeCard({ item, kind, index, car }: { item: ModuleCode; kind: 'Stored'
         <View className="flex-row items-center p-4 pl-5">
           <View className="flex-1">
             <View className="flex-row items-center">
-              <Text style={{ fontFamily: 'monospace' }} className="mr-2 text-lg font-extrabold text-text">{code}</Text>
-              <Pill kind={kind === 'Stored' ? 'bad' : kind === 'Pending' ? 'warn' : 'off'} text={kind} />
+              <Text style={{ fontFamily: 'monospace' }} className="mr-2 text-lg font-extrabold text-text">
+                {code}{mem ? <Text className="text-sm font-semibold text-muted">-{hex2(mem.ftb)}</Text> : null}
+              </Text>
+              <Pill kind={KIND_PILL[kind]} text={kind} />
             </View>
             <View className="mt-1 flex-row items-center">
               <Ionicons name="hardware-chip-outline" size={12} color={C.muted} />
               <Text className="ml-1 text-[11px] font-semibold text-muted">{moduleLabel(item)}</Text>
             </View>
             <Text numberOfLines={open ? undefined : 2} className="mt-1.5 text-sm text-muted">{describeDTC(code)}</Text>
+            {mem ? (
+              <Text className="mt-1 text-[11px] text-muted">
+                {t('Status:')} {udsStatusLabels(mem.status).map((l: string) => t(l)).join(', ')} ({hex2(mem.status)})
+              </Text>
+            ) : null}
           </View>
         </View>
         {/* no built-in code database: send the user to a web search for this car and this code */}
@@ -126,7 +138,7 @@ export default function Codes() {
       const r = await readCodes();
       await new Promise(f => setTimeout(f, Math.max(0, 1500 - (Date.now() - started)))); // let the sweep finish a turn
       setRes(r);
-      Haptics.notificationAsync(r.stored.length ? Haptics.NotificationFeedbackType.Warning : Haptics.NotificationFeedbackType.Success).catch(() => {});
+      Haptics.notificationAsync(r.stored.length || r.memory.some(c => c.active) ? Haptics.NotificationFeedbackType.Warning : Haptics.NotificationFeedbackType.Success).catch(() => {});
     } catch (e: any) { setRes(null); setMsg(e?.message ?? String(e)); }
     setBusy('');
   }
@@ -146,6 +158,7 @@ export default function Codes() {
   }
 
   const total = res ? res.stored.length + res.pending.length + res.permanent.length : 0;
+  const memActive = res ? res.memory.filter(c => c.active) : [], memHistory = res ? res.memory.filter(c => !c.active) : [];
   const mil = res?.readiness?.mil;
   let n = 0;
   return (
@@ -175,6 +188,7 @@ export default function Codes() {
             <View className="flex-1">
               <Text className="text-base font-bold text-text">{t('Check engine light:')} {t(mil ? 'ON' : 'OFF')}</Text>
               <Text className="text-xs text-muted">{total ? t(`${total} code(s) found`) : t('No trouble codes.')}</Text>
+              {res.memory.length ? <Text className="text-xs text-muted">{t(`${res.memory.length} code(s) in module memory`)}</Text> : null}
               <Text className="mt-0.5 text-[11px] text-muted">{t('Modules read:')} {res.modules.map(moduleLabel).join(', ')}</Text>
             </View>
           </Card>
@@ -217,6 +231,15 @@ export default function Codes() {
             ) : null;
           })}
 
+          {res.memory.length ? (
+            <View>
+              <SectionTitle>Module memory</SectionTitle>
+              <T className="mb-2 px-1 text-[11px] text-muted">Codes kept in each module's own memory. Active: the fault is present now. History: it happened before and is not present now.</T>
+              {memActive.map(c => <CodeCard key={'A' + c.ecu + c.code + c.ftb} item={c} kind="Active" index={n++} car={car} />)}
+              {memHistory.map(c => <CodeCard key={'H' + c.ecu + c.code + c.ftb} item={c} kind="History" index={n++} car={car} />)}
+            </View>
+          ) : null}
+
           {res.readiness ? (
             <>
               <SectionTitle>Readiness</SectionTitle>
@@ -233,7 +256,7 @@ export default function Codes() {
             </>
           ) : null}
 
-          {total ? <Button kind="danger" title={busy === 'clear' ? 'Clearing…' : 'Clear codes'} className="mt-5" disabled={!!busy} onPress={() => setConfirm(true)} /> : null}
+          {total || res.memory.length ? <Button kind="danger" title={busy === 'clear' ? 'Clearing…' : 'Clear codes'} className="mt-5" disabled={!!busy} onPress={() => setConfirm(true)} /> : null}
           {!busy ? <LogLink onPress={shareLog} /> : null}
         </>
       ) : connected && !busy ? <Empty text="Press the button to read the trouble codes." /> : null}

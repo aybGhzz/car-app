@@ -3,7 +3,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { PermissionsAndroid, Platform } from 'react-native';
 import { ELM327 } from './obd/elm327';
-import { OBD, PIDS, PID_KEYS, hex2, isBitmapPid, moduleRole } from './obd/obd';
+import { OBD, PIDS, PID_KEYS, hex2, isBitmapPid, moduleRole, udsActive } from './obd/obd';
 import { adapterLog, endDiagLog, startDiagLog } from './adapterLog';
 import { SimTransport } from './obd/simulator';
 import { BleTransport, ClassicTransport, classicReady, scanBle } from './transports/bluetooth';
@@ -486,11 +486,15 @@ async function exclusive<T>(mode: Mode, fn: (elm: any) => Promise<T>): Promise<T
 }
 
 export type ModuleCode = { code: string; ecu: string; module: string };
+// A code from a module's own fault memory (UDS 19 02): failure type byte and status byte as the module reported them.
+export type MemoryCode = ModuleCode & { ftb: number; status: number; active: boolean };
 type Readiness = { mil: boolean; count: number; diesel: boolean; monitors: { name: string; supported: boolean; complete: boolean }[] };
 export type CodesResult = {
   stored: ModuleCode[];
   pending: ModuleCode[];
   permanent: ModuleCode[];
+  memory: MemoryCode[]; // codes in the modules' own fault memory, active and history (CAN cars only)
+  memoryRead: { ecu: string; module: string }[]; // modules whose fault memory was read
   modules: { ecu: string; module: string }[]; // the modules that answered the stored-codes request
   unanswered: ('pending' | 'permanent')[]; // requests no module answered (not supported, or lost)
   refused: string[]; // modules that refused a request
@@ -514,6 +518,24 @@ export async function readCodes(): Promise<CodesResult> {
       permanent: (await OBD.dtcs(elm, '0A')) as Dtcs,
       ready: (await OBD.readinessByEcu(elm)) as Record<string, Readiness>,
     }));
+    // Each module's own fault memory, asked one module at a time (CAN only). A module that does not support it just
+    // refuses: that never hides the Mode 03 result above.
+    type Uds = { answered: boolean; codes: { code: string; ftb: number; status: number }[]; refused: boolean };
+    const memory: MemoryCode[] = [], memoryRead: { ecu: string; module: string }[] = [];
+    const targets = [...new Set([...Object.keys(r.stored.ecus), ...Object.keys(r.ready)])].sort();
+    if (targets.length) await exclusive('diag', async elm => {
+      try {
+        for (const ecu of targets) {
+          try {
+            const u = (await OBD.udsCodes(elm, ecu)) as Uds;
+            if (!u.answered) continue;
+            memoryRead.push(label(ecu));
+            for (const c of u.codes) memory.push({ ...c, ...label(ecu), active: udsActive(c.status) });
+          } catch (e: any) { adapterLog('!', `fault memory ${ecu}: ` + (e?.message ?? e)); }
+        }
+      } finally { await OBD.udsEnd(elm).catch(() => {}); }
+    });
+    memory.sort((a, b) => Number(b.active) - Number(a.active) || a.ecu.localeCompare(b.ecu) || a.code.localeCompare(b.code));
     if (!r.stored.answered) {
       const why = r.stored.refused.length ? 'refused by ' + r.stored.refused.join(', ') : r.stored.errors.join(', ') || 'no answer';
       throw new Error(`The car did not answer the trouble code request (${why}). This does not mean there are no codes: check that the ignition is on and read again.`);
@@ -528,6 +550,8 @@ export async function readCodes(): Promise<CodesResult> {
       stored: flat(r.stored.ecus),
       pending: flat(r.pending.ecus),
       permanent: flat(r.permanent.ecus),
+      memory,
+      memoryRead,
       modules: Object.keys(r.stored.ecus).sort().map(label),
       unanswered: (['pending', 'permanent'] as const).filter(k => !r[k].answered),
       refused: [...new Set([r.stored, r.pending, r.permanent].flatMap(x => x.refused))],
