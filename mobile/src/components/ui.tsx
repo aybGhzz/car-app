@@ -6,6 +6,7 @@ import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSpring, wit
 import { scheduleOnRN } from 'react-native-worklets';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { t, useLang } from '../lib/i18n';
 import { C, KIND_COLOR } from '../lib/theme';
 
@@ -150,6 +151,13 @@ export function Swatches({ value, onChange }: { value?: string; onChange: (c: st
 }
 
 // Small "Demo" label for sample data.
+// A trip from the account: imported from the Car Scanner CSV history, or synced from another phone.
+export const CloudTag = ({ csv }: { csv?: boolean }) => (
+  <View className="flex-row items-center rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5">
+    <Ionicons name={csv ? 'document-text-outline' : 'cloud-outline'} size={10} color={C.accent} />
+    <T className="ml-1 text-[10px] font-bold uppercase text-accent">{csv ? 'Car Scanner' : 'Cloud'}</T>
+  </View>
+);
 export const DemoTag = () => (
   <View className="rounded-full border border-violet/50 bg-violet/10 px-2 py-0.5"><T className="text-[10px] font-bold uppercase text-violet">Demo</T></View>
 );

@@ -7,6 +7,7 @@ import * as Haptics from 'expo-haptics';
 import type { BottomTabBarProps } from 'expo-router/build/layouts/Tabs';
 import { getLang, t, useLang } from '../lib/i18n';
 import { C } from '../lib/theme';
+import { MAX_W } from '../lib/layout';
 
 const ICONS: Record<string, [keyof typeof Ionicons.glyphMap, keyof typeof Ionicons.glyphMap]> = {
   index: ['home', 'home-outline'],
@@ -49,9 +50,10 @@ export function TabBar({ state, descriptors, navigateToTab, insets }: BottomTabB
   const pill = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
 
   return (
-    <View style={{ position: 'absolute', left: 12, right: 12, bottom: Math.max(insets.bottom, 10) }}>
+    <View style={{ position: 'absolute', left: 12, right: 12, bottom: Math.max(insets.bottom, 10), alignItems: 'center' }}>
+      {/* stays phone-sized when the phone is turned sideways */}
       <View onLayout={e => setW(e.nativeEvent.layout.width)} className="flex-row rounded-[26px] border border-line bg-panel p-1"
-        style={{ shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 12 }}>
+        style={{ width: '100%', maxWidth: MAX_W - 24, shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 12 }}>
         {w > 0 && (
           <Animated.View style={[{ position: 'absolute', top: 4, bottom: 4, left: 4, width: tabW, borderRadius: 22, backgroundColor: C.accent + '1f', borderWidth: 1, borderColor: C.accent + '40' }, pill]} />
         )}

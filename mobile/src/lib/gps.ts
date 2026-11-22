@@ -1,21 +1,43 @@
 // Records the route of the trip. With a real adapter it uses the phone's (or browser's) location. With the simulator
 // it drives a fake position around Casablanca at the simulated speed, so simulated trips also get a route.
+import { Platform } from 'react-native';
 import * as Location from 'expo-location';
+import * as TaskManager from 'expo-task-manager';
+
+import { available as serviceAvailable, onServiceGps } from '../../modules/vindici-service';
 
 type Fix = (lat: number, lng: number) => void;
 let sub: { remove: () => void } | null = null;
 
-export async function startGps(onFix: Fix) {
-  stopGps();
+// Before this build, Android recording used an expo-location background task, which needed "Allow all the time".
+// The app's own foreground service (modules/vindici-service) now keeps it alive and reads the GPS itself, with
+// "While using the app". Stop the old task if an earlier version left it running.
+const TASK = 'vindici-trip';
+if (Platform.OS !== 'web') {
+  TaskManager.defineTask(TASK, async () => {});
+  Location.hasStartedLocationUpdatesAsync(TASK).then(on => (on ? Location.stopLocationUpdatesAsync(TASK) : undefined)).catch(() => {});
+}
+
+// `route`: record fixes (the car's GPS setting). Resolves true when fixes will arrive. On Android with the service,
+// the fixes come from the service, which must then be started with gps: true (lib/live.ts startBackground).
+export async function startGps(onFix: Fix, route = true) {
+  await stopGps();
+  if (!route) return false;
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return false;
+    if (Platform.OS === 'android' && serviceAvailable) {
+      sub = onServiceGps(onFix) ?? null;
+      return true;
+    }
     sub = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, distanceInterval: 15, timeInterval: 3000 },
       p => onFix(p.coords.latitude, p.coords.longitude));
     return true;
   } catch { return false; }
 }
-export function stopGps() { sub?.remove(); sub = null; }
+export async function stopGps() {
+  sub?.remove(); sub = null;
+}
 
 // Fake GPS for the simulator: a heading that slowly turns, advanced by speed × time.
 export function simGps() {

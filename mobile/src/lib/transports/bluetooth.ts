@@ -38,20 +38,35 @@ export async function listClassicDevices(): Promise<FoundDevice[]> {
   return bonded.map((d: any) => ({ id: d.address, name: d.name || d.address }));
 }
 
+// For connecting straight to a remembered adapter: is it still paired, with Bluetooth on? Never shows a prompt.
+export async function classicReady(address: string): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+  const RNBC = load<any>('classic');
+  await askPermissions();
+  if (!(await RNBC.isBluetoothEnabled())) return false;
+  return (await RNBC.getBondedDevices()).some((d: any) => d.address === address);
+}
+
 export class ClassicTransport implements Transport {
   onData = (_: string) => {};
+  onLost?: () => void;
   private dev: any;
-  private sub: any;
+  private subs: any[] = [];
   constructor(private address: string) {}
   async open() {
     const RNBC = load<any>('classic');
     // The ELM327 ends every answer with '>', so use it as the message delimiter.
     this.dev = await RNBC.connectToDevice(this.address, { delimiter: '>', charset: 'ascii' });
-    this.sub = this.dev.onDataReceived((e: { data: string }) => this.onData(e.data + '>'));
+    this.subs.push(
+      this.dev.onDataReceived((e: { data: string }) => this.onData(e.data + '>')),
+      RNBC.onDeviceDisconnected((e: any) => { if (e?.device?.address === this.address) this.onLost?.(); }),
+      RNBC.onBluetoothDisabled(() => this.onLost?.()),
+    );
   }
   async write(s: string) { await this.dev.write(s, 'ascii'); }
   async close() {
-    this.sub?.remove();
+    this.subs.forEach(s => s?.remove?.());
+    this.subs = [];
     try { await this.dev?.disconnect(); } catch {}
   }
 }
@@ -90,13 +105,17 @@ export async function scanBle(seconds = 6): Promise<FoundDevice[]> {
 
 export class BleTransport implements Transport {
   onData = (_: string) => {};
+  onLost?: () => void;
   private dev: any;
   private tx: any;
   private sub: any;
+  private lostSub: any;
   constructor(private id: string) {}
   async open() {
     const m = bleManager();
-    this.dev = await (await m.connectToDevice(this.id)).discoverAllServicesAndCharacteristics();
+    await askPermissions();
+    this.dev = await (await m.connectToDevice(this.id, { timeout: 10000 })).discoverAllServicesAndCharacteristics();
+    this.lostSub = m.onDeviceDisconnected(this.id, () => this.onLost?.());
     const services = await this.dev.services();
     for (const svc of services.filter((s: any) => BLE_SERVICES.includes(s.uuid.toLowerCase()))) {
       const chars = await svc.characteristics();
@@ -119,6 +138,8 @@ export class BleTransport implements Transport {
   }
   async close() {
     this.sub?.remove();
+    this.lostSub?.remove();
+    this.lostSub = null;
     try { await this.dev?.cancelConnection(); } catch {}
   }
 }

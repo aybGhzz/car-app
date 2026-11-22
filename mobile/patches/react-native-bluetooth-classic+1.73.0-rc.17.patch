@@ -1,0 +1,15 @@
+diff --git a/node_modules/react-native-bluetooth-classic/android/build.gradle b/node_modules/react-native-bluetooth-classic/android/build.gradle
+index 0daf907..6c32d2b 100644
+--- a/node_modules/react-native-bluetooth-classic/android/build.gradle
++++ b/node_modules/react-native-bluetooth-classic/android/build.gradle
+@@ -32,6 +32,10 @@ android {
+         versionCode 1
+         versionName "1.0"
+     }
++    // AGP 8 no longer generates BuildConfig for libraries by default; the receivers use BuildConfig.DEBUG
++    buildFeatures {
++        buildConfig true
++    }
+     lintOptions {
+         abortOnError false
+     }

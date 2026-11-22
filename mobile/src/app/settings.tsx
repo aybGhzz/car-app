@@ -9,11 +9,20 @@ import { Screen } from '../components/Screen';
 import { VehicleSwitcher } from '../components/VehicleSwitcher';
 import { Button, Card, PressableScale, Segmented, T, Toggle } from '../components/ui';
 import { odometer, setOdometer, useFuelPrice, useVehicle, vehicleName } from '../lib/garage';
-import { getLang, LANGS, setLang, t, useLang, type Lang } from '../lib/i18n';
+import { fmtDate, fmtTime, getLang, LANGS, setLang, t, useLang, type Lang } from '../lib/i18n';
 import { setSetting, setVehicleSetting, useSettings, useVehicleSettings, type ThemeId } from '../lib/settings';
-import { kv } from '../lib/store';
+import { kv, useStored } from '../lib/store';
 import { initials, useUser } from '../lib/auth';
+import { cloudEnabled } from '../lib/supabase';
+import { syncNow, useSyncState } from '../lib/sync';
+import { DotsLoader } from '../components/Loaders';
 import { C } from '../lib/theme';
+import Constants from 'expo-constants';
+import * as Application from 'expo-application';
+import { useLive } from '../lib/live';
+import { lastDiagLog, shareAdapterLog } from '../lib/adapterLog';
+import { BackgroundCheck } from '../components/BackgroundCheck';
+import { forgetAdapter, useSavedAdapter } from '../lib/adapters';
 
 function Group({ title, scope, icon, children }: { title: string; scope: 'car' | 'app'; icon: any; children: ReactNode }) {
   return (
@@ -64,6 +73,7 @@ export default function Settings() {
   const vs = useVehicleSettings(car.id, car.fuel);
   const price = useFuelPrice(car.id);
   const user = useUser();
+  const adapter = useSavedAdapter(car.id);
   const back = () => (router.canGoBack() ? router.back() : router.replace('/'));
 
   return (
@@ -82,9 +92,22 @@ export default function Settings() {
           <Row label="Shift lights start at"><Num value={vs.shiftFrom} unit="rpm" onChange={v => setVehicleSetting(car.id, 'shiftFrom', v)} /></Row>
           <Row label="Shift lights flash at"><Num value={vs.shiftTo} unit="rpm" onChange={v => setVehicleSetting(car.id, 'shiftTo', v)} /></Row>
           <Row label="Record the route" sub="GPS position during trips"><Toggle value={vs.gps} onChange={v => setVehicleSetting(car.id, 'gps', v)} /></Row>
+          <Row label="OBD adapter" sub={adapter ? `${adapter.name} · ${adapter.id}` : t('Saved the first time you connect this car')}>
+            {adapter ? <PressableScale onPress={() => forgetAdapter(car.id)} className="rounded-full border border-line px-3 py-1.5"><T className="text-xs font-bold text-muted">Forget</T></PressableScale> : <Text className="text-muted">—</Text>}
+          </Row>
           <Link label="Car details" sub="Make, model, engine, plate, VIN" onPress={() => router.push(`/car-edit/${car.id}`)} />
           <Link label="Papers" sub="Insurance and visite technique" onPress={() => router.push('/papers')} last />
         </Card>
+      </Group>
+
+      <Group title="Trips" scope="app" icon="map">
+        <Card className="py-1">
+          <Row label="Connect automatically" sub="To the car's last adapter, when the app opens and after signing in"><Toggle value={cfg.autoConnect} onChange={v => setSetting('autoConnect', v)} /></Row>
+          <Row label="End the trip automatically" sub="After this long with the engine off, even if the adapter stays connected. 0 = never." last>
+            <Num value={cfg.autoEndMin} unit="min" onChange={v => setSetting('autoEndMin', Math.max(0, Math.round(v)))} />
+          </Row>
+        </Card>
+        <BackgroundCheck />
       </Group>
 
       <Group title="Notifications" scope="app" icon="notifications">
@@ -128,6 +151,10 @@ export default function Settings() {
         </View>
       </Group>
 
+      <Group title="Cloud sync" scope="app" icon="cloud">
+        <CloudSync />
+      </Group>
+
       <Group title="Data" scope="app" icon="server">
         <Card className="py-1">
           <Row label="Show demo trips" sub="Sample trips so the screens are not empty"><Toggle value={cfg.demo} onChange={v => setSetting('demo', v)} /></Row>
@@ -137,7 +164,77 @@ export default function Settings() {
         </Card>
       </Group>
 
-      <T className="mt-6 text-center text-xs text-muted">Vindici · version 1.0 · proof of concept</T>
+      <Group title="About" scope="app" icon="information-circle">
+        <About />
+      </Group>
+
+      <T className="mt-6 text-center text-xs text-muted">Vindici · proof of concept</T>
     </Screen>
+  );
+}
+
+// Account sync: who is signed in, when the last sync ran, and a manual "Sync now".
+function CloudSync() {
+  const user = useUser(), st = useSyncState();
+  const trips = useStored<unknown[]>('cloudTrips', []);
+  if (!cloudEnabled) return <Card><T className="text-sm text-muted">Cloud sync is not set up in this build of the app.</T></Card>;
+  if (!user?.cloud) {
+    return (
+      <Card>
+        <T className="mb-3 text-sm text-muted">Sign in to save your cars, papers, services and trips to your account and find them on any phone.</T>
+        <Button kind="primary" title="Sign in or create an account" onPress={() => router.push('/login')} />
+      </Card>
+    );
+  }
+  return (
+    <Card className="py-1">
+      <Row label="Account" sub={user.email}><Ionicons name="cloud-done-outline" size={20} color={C.ok} /></Row>
+      <Row label="Last sync" sub={st.error ? `${t('Error')}: ${st.error}` : st.at ? `${fmtDate(st.at)}, ${fmtTime(st.at)}` : t('Not synced yet')}>
+        {st.busy ? <DotsLoader /> : <Ionicons name={st.error ? 'alert-circle' : 'checkmark-circle'} size={20} color={st.error ? C.bad : C.ok} />}
+      </Row>
+      <Row label="Trips in the account" sub="Includes the Car Scanner history">
+        <Text className="font-bold text-text">{trips.length}</Text>
+      </Row>
+      <Row label="Sync now" sub="Changes are also sent automatically a few seconds after you make them" last>
+        <Button title="Sync" onPress={() => syncNow()} />
+      </Row>
+    </Card>
+  );
+}
+
+// App version, the build it came from, the adapter in use, links and credits.
+function About() {
+  useLang();
+  const S = useLive();
+  const cfg = Constants.expoConfig, extra = (cfg?.extra ?? {}) as { commit?: string | null; builtAt?: string };
+  const commit = typeof extra.commit === 'string' && extra.commit ? extra.commit : null;
+  const built = typeof extra.builtAt === 'string' ? Date.parse(extra.builtAt) : null;
+  const val = (v: string) => <Text className="max-w-[60%] text-right font-semibold text-text" numberOfLines={2}>{v}</Text>;
+  const elm = S.status === 'connected' ? (S as any).elm : null;
+  const diag = lastDiagLog();
+  return (
+    <>
+      <Card className="py-1">
+        {/* the version name is raised in app.json before each build; EAS adds 1 to the build number on every build */}
+        <Row label="Version">{val(Platform.OS === 'web' ? (cfg?.version ?? '—') : `${Application.nativeApplicationVersion ?? cfg?.version ?? '—'} (${t('build')} ${Application.nativeBuildVersion ?? '—'})`)}</Row>
+        <Row label="Build" sub={built ? fmtDate(built) + ' · ' + fmtTime(built) : undefined}>{val(commit ?? (Platform.OS === 'web' ? 'Web' : t('Local build')))}</Row>
+        <Row label="Platform">{val(Platform.OS === 'web' ? 'Web' : `${Platform.OS === 'ios' ? 'iOS' : 'Android'} ${Platform.Version}`)}</Row>
+        <Row label="Package">{val(cfg?.android?.package ?? cfg?.ios?.bundleIdentifier ?? '—')}</Row>
+        <Row label="Adapter" sub={elm ? S.message : undefined} last>{val(elm ? (elm.version || 'ELM327') : t('Not connected'))}</Row>
+      </Card>
+      <Card className="mt-2.5 py-1">
+        <Row label="Adapter log" sub="Every command sent to the adapter and its answer, since the app started">
+          <Button title="Share" onPress={() => shareAdapterLog('all').catch(() => {})} />
+        </Row>
+        <Row label="Last trouble code read" sub={diag ? `${fmtDate(diag.at)}, ${fmtTime(diag.at)}` : t('None yet')} last>
+          <Button title="Share" disabled={!diag} onPress={() => shareAdapterLog('diag').catch(() => {})} />
+        </Row>
+      </Card>
+      <Card className="mt-2.5 py-1">
+        <Row label="Web version" last>{val('—')}</Row>
+      </Card>
+      <T className="mt-2.5 px-1 text-xs text-muted">Privacy: your cars, trips and papers stay on this phone, and in your own account when you sign in. Nothing is shared with anyone else.</T>
+      <T className="mt-1.5 px-1 text-xs text-muted">Maps © OpenStreetMap contributors, tiles © CARTO. Trouble code texts are searched on the web, not stored in the app.</T>
+    </>
   );
 }

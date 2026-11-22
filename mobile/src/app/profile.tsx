@@ -7,7 +7,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button, Card, PressableScale, T } from '../components/ui';
 import { initials, signOut, useUser } from '../lib/auth';
 import { useVehicles, vehicleName } from '../lib/garage';
-import { fmtDate, t, useLang } from '../lib/i18n';
+import { fmtDate, fmtTime, t, useLang } from '../lib/i18n';
+import { useSyncState } from '../lib/sync';
 import { C } from '../lib/theme';
 import { ScrollView } from 'react-native';
 
@@ -15,6 +16,7 @@ export default function Profile() {
   useLang();
   const u = useUser();
   const cars = useVehicles();
+  const sync = useSyncState();
   const insets = useSafeAreaInsets();
   const back = () => (router.canGoBack() ? router.back() : router.replace('/'));
   return (
@@ -38,7 +40,7 @@ export default function Profile() {
         <Card className="mt-5 py-1">
           <Row icon="calendar-outline" k="Member since" v={u ? fmtDate(u.since) : '—'} />
           <Row icon="car-sport-outline" k="Cars" v={String(cars.length)} />
-          <Row icon="cloud-offline-outline" k="Sync" v={t('This phone only')} last />
+          <Row icon={u?.cloud ? 'cloud-done-outline' : 'cloud-offline-outline'} k="Sync" v={u?.cloud ? (sync.busy ? t('Syncing…') : sync.at ? `${t('Synced')} ${fmtTime(sync.at)}` : t('Not synced yet')) : t('This phone only')} last />
         </Card>
         <T className="mb-2 mt-5 px-1 text-lg font-bold">My cars</T>
         {cars.map(c => (
