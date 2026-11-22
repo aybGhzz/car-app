@@ -12,7 +12,8 @@ import { hex2 } from './obd';
 //   ISO 9141-2 and J1850 (1-3): no standard way to address one module, so no sweep.
 // Each module found is then asked for its name (UDS 22 F197 / KWP 1A 97, "system name"), with a list of usual
 // addresses as a fallback.
-// Returns [{ ecu, req, name }]: ecu is the address it answers from (as in every other result), req the one to ask.
+// Returns [{ ecu, req, name, self }]: ecu is the address it answers from (as in every other result), req the one to
+// ask, self true when the name came from the module itself.
 
 export const canScan = protocolNumber => protocolNumber >= 4 && protocolNumber <= 9;
 
@@ -55,7 +56,7 @@ export async function scanModules(elm, { make, onProgress } = {}) {
     for (const [ecu, req] of [...found.entries()].sort()) {
       let name = null;
       try { name = await readName(elm, ecu, req); } catch {}
-      out.push({ ecu, req, name: name || addressName(ecu, make) });
+      out.push({ ecu, req, name: name || addressName(ecu, make), self: !!name });
     }
     return out;
   } finally {
@@ -88,8 +89,23 @@ async function readName(elm, ecu, req) {
   }
   const r = ELM327.records(raw, elm.protocolNumber).find(x => x.ecu === ecu && x.data[0] === sid && id.every((b, i) => x.data[1 + i] === b));
   if (!r) return null;
-  const s = String.fromCharCode(...r.data.slice(1 + id.length).filter(b => b >= 0x20 && b < 0x7f)).trim();
-  return s.length >= 2 ? s : null;
+  return textName(r.data.slice(1 + id.length));
+}
+
+// A name only when the record really is text: many modules (BMW K-line ones, for instance) answer this request with
+// binary data, and picking its few printable bytes gave names like "CE" or "2S". So, after dropping the padding
+// (00, FF, spaces) at the ends, at least 80% of the bytes must be printable, with 3 characters or more and 2 letters.
+export function textName(bytes) {
+  let a = 0, b = bytes.length;
+  const pad = x => x === 0x00 || x === 0xff || x === 0x20;
+  while (a < b && pad(bytes[a])) a++;
+  while (b > a && pad(bytes[b - 1])) b--;
+  const body = bytes.slice(a, b);
+  if (body.length < 3) return null;
+  const printable = body.filter(x => x >= 0x20 && x < 0x7f);
+  if (printable.length < body.length * 0.8) return null;
+  const s = String.fromCharCode(...printable).replace(/\s+/g, ' ').trim();
+  return s.length >= 3 && (s.match(/[A-Za-z]/g) || []).length >= 2 ? s : null;
 }
 
 // Points the adapter at one CAN module: request header, and the flow control frames of a long answer sent to the
@@ -112,7 +128,7 @@ export async function setCanTarget(elm, ecu, req) {
 
 // Usual module at an address when the module gives no name. Only addresses that are the same across a maker's
 // cars are listed; anything else is shown as "Module" with its ID.
-const BMW_KLINE = { '00': 'Gateway', '01': 'Airbag', '12': 'Engine', '13': 'Engine', '18': 'Gearbox', '29': 'Stability control', '40': 'Access and immobiliser', '60': 'Instrument cluster' };
+const BMW_KLINE = { '00': 'Gateway', '01': 'Airbag', '12': 'Engine', '13': 'Engine', '18': 'Gearbox', '29': 'Stability control', '40': 'Access and immobiliser', '60': 'Instrument cluster', '70': 'Light module', '78': 'Climate control' };
 export function addressName(ecu, make) {
   const a = String(ecu).toUpperCase();
   if (a === '7E8') return 'Engine';

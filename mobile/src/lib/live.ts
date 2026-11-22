@@ -508,16 +508,20 @@ export type CodesResult = {
 };
 
 // Modules found by a module scan, per car: { at, list: [{ ecu, req, name }] }.
-export type ScannedModule = { ecu: string; req: string; name: string };
+export type ScannedModule = { ecu: string; req: string; name: string; self?: boolean };
 // Not 'modules.<car>': that key already holds the live-data PID map saved on connect (ModuleScan, another shape).
 const scanKey = () => 'diagModules.' + S.vehicle;
-export const scannedModules = (): { at: number; list: ScannedModule[] } | null => {
+export const scannedModules = (): { at: number; v?: number; list: ScannedModule[] } | null => {
   const v = kv.get<any>(scanKey(), null);
   return v && Array.isArray(v.list) ? v : null;
 };
 const carMake = () => (vehicleById(S.vehicle) as any)?.make as string | undefined;
 // A module's name: what it said about itself in the last scan, else the usual module at that address.
-const label = (ecu: string) => ({ ecu, module: scannedModules()?.list.find(m => m.ecu === ecu)?.name ?? (addressName(ecu, carMake()) as string) });
+// Scans saved before 1.1.8 (no v) kept garbled names read from binary answers, so only their addresses are used.
+const label = (ecu: string) => {
+  const scan = scannedModules(), m = scan?.list.find(x => x.ecu === ecu);
+  return { ecu, module: m && scan!.v === 2 && m.self ? m.name : (addressName(ecu, carMake()) as string) };
+};
 
 // Asks every possible module address (see obd/scan.js) and remembers what answered for this car, so every later
 // code read also asks those modules. onProgress gets { done, total, found }.
@@ -526,7 +530,7 @@ export async function scanAllModules(onProgress?: (p: { done: number; total: num
   try {
     const list = (await exclusive('diag', elm => scanModules(elm, { make: carMake(), onProgress }))) as ScannedModule[];
     adapterLog('#', 'modules found: ' + (list.map(m => `${m.ecu} (${m.name}, asked on ${m.req})`).join(', ') || 'none'));
-    kv.set(scanKey(), { at: Date.now(), list });
+    kv.set(scanKey(), { at: Date.now(), v: 2, list });
     return list;
   } finally {
     endDiagLog(diagHeader('Module scan'));
